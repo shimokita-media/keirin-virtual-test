@@ -23,6 +23,7 @@ def keep_awake(on=True):
     except Exception:
         pass
 
+ONLY_RULE = True  # 2026-11-06〜 法則枠(B1R)のみ記録（B0/B1・検証買い・万車券枠は停止。結果回収は継続）
 B0_TARGET = 45   # 締切まで45分以下(30分以上)になった最初のループで B0
 B1_WINDOW = (1.0, 4.0)  # 締切まで1〜4分で B1
 
@@ -53,7 +54,7 @@ def tick(con, done_results):
     for r in pre + post:
         rid, mins = r["race_id"], (r["close_at"] - time.time()) / 60
         try:
-            if 30 <= mins <= B0_TARGET and not has(con, rid, "B0"):
+            if not ONLY_RULE and 30 <= mins <= B0_TARGET and not has(con, rid, "B0"):
                 rd, odds, meta = kr.fetch_race(con, r, "B0")
                 nk, _ = kr.fetch_nk_odds(con, r, "B0")
                 if odds and odds["3連単"]:
@@ -75,7 +76,7 @@ def tick(con, done_results):
                             notify.toast(f"競輪 {r['venue']}{r['race_no']}R 締切{kr.ts(r['close_at'])[11:16]}（あと{m:.0f}分）",
                                          " / ".join(f"{p['bet_type']}{p['combo']} {p['odds']}倍" for p in picks))
                         notify.write_today(con, DAY)
-            elif B1_WINDOW[0] <= mins <= B1_WINDOW[1] and not has(con, rid, "B1"):
+            elif not ONLY_RULE and B1_WINDOW[0] <= mins <= B1_WINDOW[1] and not has(con, rid, "B1"):
                 rd, odds, meta = kr.fetch_race(con, r, "B1")
                 nk, _ = kr.fetch_nk_odds(con, r, "B1")
                 if odds and odds["3連単"]:
