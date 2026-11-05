@@ -11,7 +11,10 @@ import kr
 
 
 def keep_awake(on=True):
-    """実行中だけ Windows のアイドルスリープを抑止（プロセス単位の要求。システム設定は変更しない）"""
+    """環境変数 KEIRIN_KEEP_AWAKE=1 のときだけ、実行中の Windows アイドルスリープを抑止する。
+    既定は抑止しない（PCを使っている間だけ動かし、電気代を増やさない方針）"""
+    if os.environ.get("KEIRIN_KEEP_AWAKE") != "1":
+        return
     try:
         import ctypes
         ES_CONTINUOUS, ES_SYSTEM_REQUIRED = 0x80000000, 0x00000001
@@ -76,7 +79,20 @@ def tick(con, done_results):
             say("ERR", rid, traceback.format_exc()[-400:])
 
 
+def single_instance():
+    """重複起動の防止（ローカルのポートを確保できなければ、既に動いているとみなして終了）"""
+    import socket
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        s.bind(("127.0.0.1", 47615))
+    except OSError:
+        say("already running; exit")
+        sys.exit(0)
+    return s
+
+
 def main():
+    _lock = single_instance()  # noqa: F841  プロセス終了まで保持
     con = kr.db()
     once = "--once" in sys.argv
     global START
