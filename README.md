@@ -15,29 +15,26 @@ python run_day.py      # 最初のレースの締切90分前までに起動（�
 python export.py       # 終了後
 ```
 
-## 自動実行（設定済みのもの）
-- `run_daily.bat`：前日の結果を補完 → 当日ループ → 終了時に `export.py` と `history.py` を実行。ログは `logs\run_daily.log`
-- `run_day.py` は実行中だけスリープを抑止する（`SetThreadExecutionState`。システム設定は変更しない）
-- 判断ルール v2（2026-11-05〜）
-  - EV は「確定までの想定下落率」を掛けたオッズで評価する
-  - 3連単300倍以上、ワイド10〜50倍、FIIのワイドは除外する
-  - 先行型／番手型の判定を「展開」欄に記録する
+## 自動実行（PC起動時に開始する方式）
+- PCにログオンすると、スタートアップの `keirin.lnk` から `run_daily.bat` が最小化状態で起動する
+  - 前日の結果の取りこぼしを補完 → 当日ループ → 全レース確定後に `export.py` と `history.py` を実行。ログは `logs\run_daily.log`
+- PCがスリープ・シャットダウンしたら止まる（電気代を増やさないため、スリープ抑止はしない）。抑止したい日だけ環境変数 `KEIRIN_KEEP_AWAKE=1` を設定する
+- 1日に何度ログオンしても二重には起動しない（ローカルのポート47615で判定）
+- 止めたいときは、タスクバーの最小化されたウィンドウを閉じる
+- PCが止まっていた時間帯の B0/B1 は「欠損」として記録し、事後には補完しない
 
-タスクスケジューラへの登録は、本人が PowerShell で実行する（毎朝7:30・スリープ復帰あり）:
+スタートアップへの登録（本人が PowerShell で1回だけ実行）:
 ```
-$a = New-ScheduledTaskAction -Execute 'C:\Users\take0\.claude\keirin\run_daily.bat' -WorkingDirectory 'C:\Users\take0\.claude\keirin'
-$t = New-ScheduledTaskTrigger -Daily -At 07:30
-$s = New-ScheduledTaskSettingsSet -WakeToRun -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Hours 20) -MultipleInstances IgnoreNew
-Register-ScheduledTask -TaskName 'KeirinVirtualTest' -Action $a -Trigger $t -Settings $s -Force
+$s=(New-Object -ComObject WScript.Shell).CreateShortcut("$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup\keirin.lnk"); $s.TargetPath='C:\Users\take0\.claude\keirin\run_daily.bat'; $s.WorkingDirectory='C:\Users\take0\.claude\keirin'; $s.WindowStyle=7; $s.Save()
 ```
-解除: `Unregister-ScheduledTask -TaskName KeirinVirtualTest -Confirm:$false`
+解除: `Remove-Item "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup\keirin.lnk"`
 
-## 自動実行の案（旧メモ）
-1. **Windows タスクスケジューラ**（推奨。PCが起動していれば Claude なしで動く）
-   - 07:30 に `python run_day.py` を起動（朝の開催の B0 に間に合わせる）
-   - 23:59 に `python export.py` を実行
-2. **Claude のスケジュールタスク**: 翌朝に `export.py` の結果を読み、Notion への同期・読み戻し・レポートの要約を行う
-3. 注意: PC がスリープすると B0/B1 の時刻窓を逃す。B0/B1 が欠けたレースは「欠損」として記録し、事後に補完しない
+判断ルール v2（2026-11-05〜）
+- EV は「確定までの想定下落率」を掛けたオッズで評価する
+- 3連単300倍以上、ワイド10〜50倍、FIIのワイドは除外する
+- 先行型／番手型の判定を「展開」欄に記録する
+
+（GitHub Actions / Google Cloud 用の設定も `.github/` と `deploy/` に残してあるが、現在は使っていない）
 
 ## モデルの前提（重要）
 - 推定確率は、3連単・2車単・3連複の各プールから得た市場の暗黙確率です。独立に校正した勝率モデルではありません。
