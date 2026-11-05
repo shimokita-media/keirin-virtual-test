@@ -8,6 +8,7 @@ import time
 import traceback
 
 import kr
+import notify
 
 
 def keep_awake(on=True):
@@ -61,6 +62,19 @@ def tick(con, done_results):
                     say("B0", r["venue"], r["race_no"], "R", res and (res["race_rating"], res["total"]))
                 else:
                     say("B0 skip (odds unavailable)", rid)
+            elif 4.0 <= mins <= 7.0 and not has(con, rid, "B1R"):
+                # 法則枠: 締切4〜7分前に判断し、買い目があれば通知（人が買える時間を残すため）
+                rd, odds, meta = kr.fetch_race(con, r, "B1R")
+                if odds and odds["3連単"]:
+                    r = con.execute("SELECT * FROM races WHERE race_id=?", (rid,)).fetchone()
+                    out = kr.record_rule(con, r, odds, meta)
+                    if out:
+                        picks, cond, m = out
+                        say("B1R", r["venue"], r["race_no"], "R", len(picks), "点", cond)
+                        if picks:
+                            notify.toast(f"競輪 {r['venue']}{r['race_no']}R 締切{kr.ts(r['close_at'])[11:16]}（あと{m:.0f}分）",
+                                         " / ".join(f"{p['bet_type']}{p['combo']} {p['odds']}倍" for p in picks))
+                        notify.write_today(con, DAY)
             elif B1_WINDOW[0] <= mins <= B1_WINDOW[1] and not has(con, rid, "B1"):
                 rd, odds, meta = kr.fetch_race(con, r, "B1")
                 nk, _ = kr.fetch_nk_odds(con, r, "B1")
@@ -75,6 +89,8 @@ def tick(con, done_results):
                 kr.fetch_race(con, r, "POST")
                 if con.execute("SELECT 1 FROM payouts WHERE race_id=?", (rid,)).fetchone():
                     done_results.add(rid); say("result", r["venue"], r["race_no"], "R")
+                    if has(con, rid, "B1R"):
+                        notify.write_today(con, DAY)
         except Exception:
             say("ERR", rid, traceback.format_exc()[-400:])
 

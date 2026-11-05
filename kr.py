@@ -409,6 +409,53 @@ def front_runner_note(con, row):
     return ""
 
 
+RULE_TYPES = ("2車複", "3連複", "ワイド")
+
+
+def rule_picks(con, row, odds):
+    """法則枠 B1R（2026-11-06〜）。過去32日の確定オッズで回収率147%だった法則に、レース条件を加えたもの。
+    レース条件: 7車立て・本命の1着見込み30〜60%・並びが二分戦か三分戦
+    買い目: 2車複/3連複/ワイドのうち、3連単の売れ方から見た割安度（見込み）が1.0以上の組番（各100円、最大5点）
+    戻り値: (picks, 条件の説明)。条件外なら picks は空"""
+    n_car = con.execute("SELECT COUNT(*) FROM entries WHERE race_id=? AND absent=0", (row["race_id"],)).fetchone()[0]
+    P = tri_probs(odds, 1.0)
+    win = {}
+    for (i, j, k), p in P.items():
+        win[i] = win.get(i, 0) + p
+    fav = max(win.values()) if win else 0
+    lt = row["line_type"] or ""
+    cond = f"{n_car}車・本命の1着見込み{fav:.0%}・{lt or '並び不明'}"
+    if n_car != 7 or not (0.30 <= fav <= 0.60) or lt not in ("二分戦", "三分戦"):
+        return [], cond + " → 条件外"
+    picks = [r for r in evaluate(odds) if r["bet_type"] in RULE_TYPES and r["evc"] >= 1.0]
+    picks.sort(key=lambda r: -r["evc"])
+    return picks[:5], cond
+
+
+def record_rule(con, row, odds, meta):
+    """法則枠を締切4〜7分前に判断して記録する（通知と同じ内容）。読み戻しで一致を確認"""
+    mins = (row["close_at"] - time.time()) / 60
+    if not (3.0 <= mins <= 8.0):
+        return None
+    picks, cond = rule_picks(con, row, odds)
+    created = now().isoformat(timespec="seconds")
+    recs = [(r["bet_type"], r["combo"], 100, r["odds"], r["p"], r["ev1"], r["ev2"], f"見込み{r['evc']:.2f}") for r in picks] \
+        or [("見送り", "", 0, None, None, None, None, "C")]
+    for bt, c, s, o, p, e1, e2, tag in recs:
+        sha = hashlib.sha256(f"{row['race_id']}|B1R|{created}|{bt}|{c}|{s}|{o}".encode()).hexdigest()[:16]
+        con.execute("""INSERT INTO predictions(race_id,phase,created_at,close_at,minutes_to_close,bet_type,combo,stake,
+            ref_odds,ref_source,ref_odds_fetched_at,ref_source_updated_at,model_prob,ev_a10,ev_a115,bet_rating,race_rating,reason,sha)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    (row["race_id"], "B1R", created, ts(row["close_at"]), round(mins, 1), bt, c, s, o, meta["source"],
+                     meta["fetched_at"], meta["source_updated_at"], p, e1, e2, tag, "R" if picks else "C",
+                     json.dumps({"法則枠": cond}, ensure_ascii=False), sha))
+    con.commit()
+    n = con.execute("SELECT COUNT(*) FROM predictions WHERE race_id=? AND phase='B1R' AND created_at=?",
+                    (row["race_id"], created)).fetchone()[0]
+    assert n == len(recs), "B1R read-back mismatch"
+    return picks, cond, mins
+
+
 def test_track(con, row, odds, meta, rows, mins, excluded):
     """検証買い B1T（データを貯めるための別枠。B0/B1 とは別集計）。B1 と同時刻・同オッズで全レース記録する。
     1) 想定EV最上位（除外帯を除く）に200円
