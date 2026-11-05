@@ -140,11 +140,15 @@ def main():
             break
         time.sleep(30)
     say("finished")
-    try:
-        notify.discord("【本日のまとめ】\n" + notify.write_today(con, DAY))
-    except Exception:
-        pass
     keep_awake(False)
+    # 本日のまとめは、その日の全レースが確定したときだけ送る（途中の区切りでは送らない）
+    rs_all = rows(con)
+    if rs_all and all(con.execute("SELECT 1 FROM payouts WHERE race_id=?", (r["race_id"],)).fetchone()
+                      or r["status"] == 9 for r in rs_all):
+        try:
+            notify.discord("【本日のまとめ】\n" + notify.write_today(con, DAY))
+        except Exception:
+            pass
     import subprocess
     finished_all = all(r["race_id"] in done or r["status"] == 9 for r in rows(con))
     for script in (("export.py", "history.py") if finished_all else ("export.py",)):
