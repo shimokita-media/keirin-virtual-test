@@ -387,6 +387,7 @@ def six_views(con, row, odds, rows):
 
 # ---------------------------------------------------------------- 判断（B0/B1）
 RULE_VERSION = "v2-20261105"
+ENABLE_15 = False  # 15点枠 B1T15 の記録（停止中）
 # 参照オッズ→確定オッズの下落率（2026-11-04 の B0/B1 実測の中央値。選ばれた組番の値なので保守的に使う）
 DRIFT = {"B0": {"ワイド": -0.60, "3連複": -0.55, "2車単": -0.42, "2車複": -0.41, "3連単": -0.30},
          "B1": {"ワイド": -0.42, "3連単": -0.17, "2車複": -0.15, "2車単": -0.15, "3連複": -0.15}}
@@ -440,7 +441,8 @@ def test_track(con, row, odds, meta, rows, mins, excluded):
                     r = next((x for x in rows if x["bet_type"] == "2車単" and x["combo"] == combo), None)
                     picks.append(("2車単", combo, 100, o[0], r and r["p"], r and r["ev1"], r and r["ev2"], "番手人気型"))
     # 15点枠 B1T15: 想定EV順に15点（各100円）。bet_rating に順位 #1〜#15 を入れ、上位k点ごとの的中率・回収率を比較する
-    ranked = sorted([r for r in ok if r["p"] >= 0.01], key=lambda r: -r["evc"])[:15]
+    # 2026-11-05 22時台に停止（ユーザー判断）。過去の B1T15 記録は残す
+    ranked = sorted([r for r in ok if r["p"] >= 0.01], key=lambda r: -r["evc"])[:15] if ENABLE_15 else []
     picks15 = [(r["bet_type"], r["combo"], 100, r["odds"], r["p"], r["ev1"], r["ev2"], f"#{i + 1:02d}")
                for i, r in enumerate(ranked)]
     created = now().isoformat(timespec="seconds")
