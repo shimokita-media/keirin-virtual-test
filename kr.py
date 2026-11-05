@@ -1,0 +1,493 @@
+"""競輪 市場の歪み検出システム（仮想購入のみ・実投票なし）
+
+データソース
+  - WINTICKET レースページ SSR (/keirin/{slug}/racecard/...)  robots.txt 許可パス
+      開催一覧・出走表・選手情報・並び予想・コメント・組番別オッズ(+更新時刻)・確定着順/的中組番
+  - netkeirin 公開JSON (keirin.netkeiba.com/api/race/ class=AplRaceOdds)  robots.txt 全許可
+      組番別オッズの照合用
+  - オッズパークは robots.txt で ClaudeBot を拒否しているため不使用
+"""
+import datetime as dt
+import hashlib
+import itertools
+import json
+import os
+import sqlite3
+import time
+from zoneinfo import ZoneInfo
+
+import requests
+
+JST = ZoneInfo("Asia/Tokyo")
+BASE = os.path.dirname(os.path.abspath(__file__))
+UA = {"User-Agent": "Mozilla/5.0 (personal research; low-rate)"}
+REQ_INTERVAL = 2.0  # 秒。各サイトへの最小リクエスト間隔
+TAKEOUT_RETURN = 0.75  # 競輪の払戻率（全券種）
+
+GRADE = {1: "FII", 2: "FI", 3: "GIII", 4: "GII", 5: "GI", 6: "GP"}  # netkeirin表記と照合済み(FI/FII)
+GRADE_PRIORITY = {"GP": 0, "GI": 1, "GII": 2, "GIII": 3, "FI": 4, "FII": 5}
+# WINTICKET type番号 / netkeirin list番号 -> 券種
+WT_TYPES = {"trifecta": "3連単", "trio": "3連複", "exacta": "2車単", "quinella": "2車複", "quinellaPlace": "ワイド"}
+WT_TYPE_NO = {2: "3連単", 3: "3連複", 4: "2車単", 5: "2車複", 6: "ワイド"}
+NK_TYPES = {"list_9": "3連単", "list_8": "3連複", "list_6": "2車単", "list_5": "2車複", "list_7": "ワイド"}
+BET_TYPES = ["3連単", "3連複", "2車単", "2車複", "ワイド"]
+
+_last_req = {}
+
+
+def now():
+    return dt.datetime.now(JST)
+
+
+def ts(t):
+    return dt.datetime.fromtimestamp(t, JST).strftime("%Y-%m-%d %H:%M:%S") if t else ""
+
+
+def _get(host, fn):
+    wait = REQ_INTERVAL - (time.time() - _last_req.get(host, 0))
+    if wait > 0:
+        time.sleep(wait)
+    try:
+        return fn()
+    finally:
+        _last_req[host] = time.time()
+
+
+# ---------------------------------------------------------------- DB
+def db():
+    con = sqlite3.connect(os.path.join(BASE, "keirin.sqlite"), timeout=60)
+    con.executescript("""
+    CREATE TABLE IF NOT EXISTS races(race_id TEXT PRIMARY KEY, date TEXT, venue_id TEXT, venue TEXT, slug TEXT,
+      cup_id TEXT, cup_name TEXT, grade TEXT, day_index INT, race_no INT, class TEXT, race_type TEXT,
+      close_at INT, start_at INT, status INT, entries_number INT, line_type TEXT, line_json TEXT,
+      advancement TEXT, updated_at TEXT);
+    CREATE TABLE IF NOT EXISTS entries(race_id TEXT, number INT, bracket INT, player_id TEXT, name TEXT,
+      prefecture TEXT, term INT, age INT, class INT, grp INT, style TEXT, gear REAL, race_point REAL,
+      comment TEXT, prediction_mark INT, first_rate REAL, second_rate REAL, third_rate REAL,
+      n_front INT, n_stalker INT, n_closer INT, n_marker INT, recent_orders TEXT, absent INT,
+      fetched_at TEXT, PRIMARY KEY(race_id, number));
+    CREATE TABLE IF NOT EXISTS odds(race_id TEXT, source TEXT, bet_type TEXT, combo TEXT, odds REAL,
+      odds_max REAL, popularity INT, source_updated_at TEXT, fetched_at TEXT, phase TEXT,
+      PRIMARY KEY(race_id, source, fetched_at, bet_type, combo));
+    CREATE TABLE IF NOT EXISTS fetch_log(at TEXT, source TEXT, url TEXT, race_id TEXT, ok INT, n INT, note TEXT);
+    CREATE TABLE IF NOT EXISTS predictions(pred_id INTEGER PRIMARY KEY AUTOINCREMENT, race_id TEXT, phase TEXT,
+      created_at TEXT, close_at TEXT, minutes_to_close REAL, bet_type TEXT, combo TEXT, stake INT,
+      ref_odds REAL, ref_source TEXT, ref_odds_fetched_at TEXT, ref_source_updated_at TEXT,
+      model_prob REAL, ev_a10 REAL, ev_a115 REAL, bet_rating TEXT, race_rating TEXT, reason TEXT, sha TEXT);
+    CREATE TRIGGER IF NOT EXISTS pred_no_update BEFORE UPDATE ON predictions
+      BEGIN SELECT RAISE(ABORT, 'predictions is append-only'); END;
+    CREATE TRIGGER IF NOT EXISTS pred_no_delete BEFORE DELETE ON predictions
+      BEGIN SELECT RAISE(ABORT, 'predictions is append-only'); END;
+    CREATE TABLE IF NOT EXISTS results(race_id TEXT, rank INT, number INT, player_id TEXT, factor TEXT,
+      margin TEXT, fetched_at TEXT, PRIMARY KEY(race_id, rank, number));
+    CREATE TABLE IF NOT EXISTS payouts(race_id TEXT, bet_type TEXT, combo TEXT, payout INT, popularity INT,
+      fetched_at TEXT, PRIMARY KEY(race_id, bet_type, combo));
+    """)
+    return con
+
+
+def log(con, source, url, race_id, ok, n=0, note=""):
+    con.execute("INSERT INTO fetch_log VALUES(?,?,?,?,?,?,?)",
+                (now().isoformat(timespec="seconds"), source, url, race_id, int(ok), n, note[:300]))
+    con.commit()
+
+
+# ---------------------------------------------------------------- WINTICKET
+def wt_state(url):
+    r = _get("wt", lambda: requests.get(url, headers=UA, timeout=20))
+    r.raise_for_status()
+    h = r.text
+    i = h.index("window.__PRELOADED_STATE__")
+    i = h.index("{", i)
+    d, _ = json.JSONDecoder().raw_decode(h[i:])
+    return {q["queryKey"][1]: q["state"]["data"] for q in d["tanStackQuery"]["queries"]}, d.get("unixnow")
+
+
+def fetch_daily(con, date=None):
+    """開催一覧（全国）。WINTICKET racecard トップ。"""
+    url = "https://www.winticket.jp/keirin/racecard/"
+    try:
+        q, _ = wt_state(url)
+        dd = q["FETCH_KEIRIN_DAILY_RACE"]
+    except Exception as e:  # noqa
+        log(con, "winticket", url, "", 0, 0, repr(e))
+        raise
+    venues = {v["id"]: v for v in q["FETCH_KEIRIN_VENUE_LIST"]["venues"]}
+    cups = {c["id"]: c for c in dd["cups"]}
+    sch = {s["id"]: s for s in dd["schedules"]}
+    t = now().isoformat(timespec="seconds")
+    for r in dd["races"]:
+        s = sch[r["scheduleId"]]
+        c = cups[s["cupId"]]
+        v = venues[c["venueId"]]
+        con.execute("""INSERT INTO races(race_id,date,venue_id,venue,slug,cup_id,cup_name,grade,day_index,race_no,
+            class,race_type,close_at,start_at,status,entries_number,advancement,updated_at)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(race_id) DO UPDATE SET status=excluded.status, close_at=excluded.close_at,
+            start_at=excluded.start_at, entries_number=excluded.entries_number, updated_at=excluded.updated_at""",
+                    (r["id"], s["date"], c["venueId"], v["name"], v["slug"], c["id"], c["name"],
+                     GRADE.get(c["grade"], str(c["grade"])), s["index"], r["number"], r["class"], r["raceType"],
+                     r["closeAt"], r["startAt"], r["status"], r["entriesNumber"],
+                     r.get("advancementConditionText", ""), t))
+    con.commit()
+    log(con, "winticket", url, "", 1, len(dd["races"]), f"cups={len(cups)}")
+    return len(cups), len(dd["races"])
+
+
+def race_url(row):
+    return f"https://www.winticket.jp/keirin/{row['slug']}/racecard/{row['cup_id']}/{row['day_index']}/{row['race_no']}"
+
+
+def fetch_race(con, row, phase=""):
+    """出走表・並び・オッズ・結果を1リクエストで取得。戻り値: (race_data, odds_dict, odds_meta)"""
+    url = race_url(row)
+    rid = row["race_id"]
+    try:
+        q, unixnow = wt_state(url)
+        rd = q["FETCH_KEIRIN_RACE"]
+        od = q.get("FETCH_KEIRIN_RACE_ODDS") or rd
+    except Exception as e:
+        log(con, "winticket", url, rid, 0, 0, repr(e))
+        return None, None, None
+    t = now().isoformat(timespec="seconds")
+    # 出走表
+    players = {p["id"]: p for p in rd["players"]}
+    recs = {r["playerId"]: r for r in rd["records"]}
+    for e in rd["entries"]:
+        p = players.get(e["playerId"], {})
+        rc = recs.get(e["playerId"], {})
+        recent = [x["order"] for c in rc.get("latestCupResults", []) for x in c.get("raceResults", [])]
+        con.execute("INSERT OR REPLACE INTO entries VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (rid, e["number"], e["bracketNumber"], e["playerId"], p.get("name"), p.get("prefecture"),
+                     p.get("term"), p.get("age"), p.get("class"), p.get("group"), rc.get("style"),
+                     rc.get("gearRatio"), rc.get("racePoint"), rc.get("comment"), rc.get("predictionMark"),
+                     rc.get("firstRate"), rc.get("secondRate"), rc.get("thirdRate"), rc.get("frontRunner"),
+                     rc.get("stalker"), rc.get("deepCloser"), rc.get("marker"), json.dumps(recent),
+                     int(e["absent"]), t))
+    lp = rd.get("linePrediction") or {}
+    con.execute("UPDATE races SET line_type=?, line_json=?, status=?, updated_at=? WHERE race_id=?",
+                (lp.get("lineType"), json.dumps(lp.get("lines", []), ensure_ascii=False),
+                 rd["race"]["status"], t, rid))
+    # オッズ
+    odds = {bt: {} for bt in BET_TYPES}
+    src_upd = ts(od.get("oddsUpdatedAt"))
+    n = 0
+    for k, bt in WT_TYPES.items():
+        for o in od.get(k, []):
+            combo = "-".join(map(str, o["key"]))
+            if bt == "ワイド":
+                val, vmax = o["minOdds"], o["maxOdds"]
+            else:
+                val, vmax = o["odds"], None
+            if o.get("absent"):
+                continue
+            odds[bt][combo] = (val, vmax, o.get("popularityOrder"))
+            con.execute("INSERT OR IGNORE INTO odds VALUES(?,?,?,?,?,?,?,?,?,?)",
+                        (rid, "winticket", bt, combo, val, vmax, o.get("popularityOrder"), src_upd, t, phase))
+            n += 1
+    meta = {"source": "winticket", "fetched_at": t, "source_updated_at": src_upd,
+            "final": od.get("finalOdds"), "aggregated": od.get("isAggregated"), "delayed": od.get("oddsDelayed")}
+    # 結果
+    if rd.get("results"):
+        num_of = {e["playerId"]: e["number"] for e in rd["entries"]}
+        for x in rd["results"]:
+            con.execute("INSERT OR REPLACE INTO results VALUES(?,?,?,?,?,?,?)",
+                        (rid, x["order"], num_of.get(x["playerId"]), x["playerId"], x["factor"], x["margin"], t))
+        for k, bt in WT_TYPES.items():
+            for wid in rd.get(k + "WinningOddsIds", []):
+                combo = wid.split(":")[2].replace(".", "-")
+                o = next((o for o in od.get(k, []) if "-".join(map(str, o["key"])) == combo), None)
+                if o:
+                    pay = o.get("payoffUnitPrice") or round(o["odds"] * 100)
+                    con.execute("INSERT OR REPLACE INTO payouts VALUES(?,?,?,?,?,?)",
+                                (rid, bt, combo, pay, o.get("popularityOrder"), t))
+    con.commit()
+    log(con, "winticket", url, rid, 1, n, f"odds_upd={src_upd} final={od.get('finalOdds')}")
+    return rd, odds, meta
+
+
+def fetch_nk_odds(con, row, phase=""):
+    rid = row["race_id"]
+    nk_id = f"{row['date']}{int(row['venue_id']):02d}{row['race_no']:02d}"
+    url = "https://keirin.netkeiba.com/api/race/"
+    try:
+        r = _get("nk", lambda: requests.post(url, headers={**UA, "Referer": f"https://keirin.netkeiba.com/race/odds/?race_id={nk_id}"},
+                                             data={"class": "AplRaceOdds", "method": "get", "compress": "0",
+                                                   "race_id": nk_id, "input": "UTF-8", "output": "json"}, timeout=20))
+        j = r.json()
+        d = j["data"][f"nkrace_odds::{nk_id}"]
+        upd = j["data"].get(f"nkrace_odds::{nk_id}_last_dt", "")
+    except Exception as e:
+        log(con, "netkeirin", url, rid, 0, 0, f"{nk_id} {e!r}")
+        return None, None
+    t = now().isoformat(timespec="seconds")
+    odds = {bt: {} for bt in BET_TYPES}
+    n = 0
+    for k, bt in NK_TYPES.items():
+        for row_ in d.get(k, []):
+            c = row_[0]
+            combo = "-".join(str(int(c[i:i + 2])) for i in range(0, len(c), 2))
+            try:
+                val = float(row_[1])
+            except ValueError:
+                continue
+            vmax = float(row_[2]) if row_[2] else None
+            odds[bt][combo] = (val, vmax, int(row_[3]) if row_[3] else None)
+            con.execute("INSERT OR IGNORE INTO odds VALUES(?,?,?,?,?,?,?,?,?,?)",
+                        (rid, "netkeirin", bt, combo, val, vmax, odds[bt][combo][2], str(upd), t, phase))
+            n += 1
+    con.commit()
+    log(con, "netkeirin", url, rid, 1, n, f"{nk_id} last_dt={upd}")
+    return odds, {"source": "netkeirin", "fetched_at": t, "source_updated_at": str(upd)}
+
+
+# ---------------------------------------------------------------- 確率モデル（券種間整合）
+def tri_probs(odds, alpha=1.0):
+    """3連単オッズから市場の推定確率。alpha>1 は大穴を割り引く（大穴過大評価バイアス補正の感度分析用）。
+    9999.9（票なし/発売前相当）は除外。"""
+    q = {c: (1.0 / o[0]) ** alpha for c, o in odds["3連単"].items() if o[0] and o[0] < 9999}
+    s = sum(q.values())
+    return {tuple(map(int, c.split("-"))): v / s for c, v in q.items()} if s else {}
+
+
+def derived(P):
+    ex, qu, wi, tr = {}, {}, {}, {}
+    for (i, j, k), p in P.items():
+        ex[(i, j)] = ex.get((i, j), 0) + p
+        a = tuple(sorted((i, j)))
+        qu[a] = qu.get(a, 0) + p
+        t3 = tuple(sorted((i, j, k)))
+        tr[t3] = tr.get(t3, 0) + p
+        for pr in itertools.combinations(sorted((i, j, k)), 2):
+            wi[pr] = wi.get(pr, 0) + p
+    return ex, qu, wi, tr
+
+
+def model_probs(odds, alpha):
+    """各券種の「他プール由来」推定確率。
+    2車単/2車複/ワイド/3連複: 3連単プールから集計。
+    3連単: 2車単プール(1-2着) × 3連単内の3着条件付き と 3連複プール × 3連単内の着順配分 の平均。"""
+    P = tri_probs(odds, alpha)
+    if not P:
+        return None
+    ex, qu, wi, tr = derived(P)
+    out = {"2車単": {f"{a}-{b}": p for (a, b), p in ex.items()},
+           "2車複": {f"{a}-{b}": p for (a, b), p in qu.items()},
+           "ワイド": {f"{a}-{b}": p for (a, b), p in wi.items()},
+           "3連複": {"-".join(map(str, t)): p for t, p in tr.items()}}
+    # 2車単・3連複プールの確率
+    def pool(bt):
+        q = {c: (1.0 / o[0]) ** alpha for c, o in odds[bt].items() if o[0] and o[0] < 9999}
+        s = sum(q.values())
+        return {c: v / s for c, v in q.items()} if s else {}
+    pex, ptr = pool("2車単"), pool("3連複")
+    t3 = {}
+    for (i, j, k), p in P.items():
+        a = pex.get(f"{i}-{j}", 0) * (p / ex[(i, j)])
+        key = "-".join(map(str, sorted((i, j, k))))
+        b = ptr.get(key, 0) * (p / tr[tuple(sorted((i, j, k)))])
+        t3[f"{i}-{j}-{k}"] = (a + b) / 2
+    out["3連単"] = t3
+    return out
+
+
+def evaluate(odds):
+    """全組番の EV を α=1.0 と α=1.15 で算出。保守的に min を採用。"""
+    m1, m2 = model_probs(odds, 1.0), model_probs(odds, 1.15)
+    if not m1:
+        return []
+    rows = []
+    for bt in BET_TYPES:
+        for c, (o, omax, pop) in odds[bt].items():
+            if not o or o >= 9999:
+                continue
+            p1, p2 = m1[bt].get(c, 0), m2[bt].get(c, 0)
+            rows.append({"bet_type": bt, "combo": c, "odds": o, "odds_max": omax, "pop": pop,
+                         "p": p1, "ev1": p1 * o, "ev2": p2 * o, "evc": min(p1 * o, p2 * o)})
+    return rows
+
+
+def rate(r):
+    p, e = r["p"], r["evc"]
+    if e >= 1.30 and p >= 0.05:
+        return "A+"
+    if e >= 1.20 and p >= 0.03:
+        return "A"
+    if e >= 1.10 and p >= 0.02:
+        return "B"
+    return "C"
+
+
+def equivalence_checks(odds):
+    """厳密に同一事象となる組合せの合成オッズ比較。
+    (1) 2車複 {i,j}  ≡ 2車単 i-j + j-i （相互排他・和集合が一致）
+    (2) 3連複 {i,j,k} ≡ 3連単 6通り（相互排他・和集合が一致）
+    ※ 3連単の裏表2点と2車複は3着条件が残るので同一事象ではない（比較対象にしない）。"""
+    out = []
+    for c, (o, _, _) in odds["2車複"].items():
+        i, j = c.split("-")
+        a, b = odds["2車単"].get(f"{i}-{j}"), odds["2車単"].get(f"{j}-{i}")
+        if a and b and o < 9999 and a[0] < 9999 and b[0] < 9999:
+            syn = 1 / (1 / a[0] + 1 / b[0])
+            out.append({"event": f"1-2着={{{i},{j}}}", "single": ("2車複", c, o), "synthetic": ("2車単2点", syn),
+                        "ratio": o / syn})
+    for c, (o, _, _) in odds["3連複"].items():
+        ks = c.split("-")
+        ps = ["-".join(p) for p in itertools.permutations(ks)]
+        os_ = [odds["3連単"].get(p) for p in ps]
+        if o < 9999 and all(x and x[0] < 9999 for x in os_):
+            syn = 1 / sum(1 / x[0] for x in os_)
+            out.append({"event": f"1-3着={{{c}}}", "single": ("3連複", c, o), "synthetic": ("3連単6点", syn),
+                        "ratio": o / syn})
+    return out
+
+
+# ---------------------------------------------------------------- 6視点（ルールベース）
+def six_views(con, row, odds, rows):
+    rid = row["race_id"]
+    E = [dict(zip([d[0] for d in con.execute("SELECT * FROM entries LIMIT 0").description], x))
+         for x in con.execute("SELECT * FROM entries WHERE race_id=? AND absent=0 ORDER BY number", (rid,))]
+    lines = json.loads(row["line_json"] or "[]")
+    P = tri_probs(odds, 1.0)
+    win = {}
+    for (i, j, k), p in P.items():
+        win[i] = win.get(i, 0) + p
+    by_no = {e["number"]: e for e in E}
+    pts_rank = {e["number"]: r + 1 for r, e in enumerate(sorted(E, key=lambda e: -(e["race_point"] or 0)))}
+    mk_rank = {n: r + 1 for r, (n, _) in enumerate(sorted(win.items(), key=lambda x: -x[1]))}
+    lines_s = []
+    for ln in lines:
+        nums = [n for ent in ln["entries"] for n in ent["numbers"]]
+        lines_s.append(nums)
+    v = {}
+    desc = " / ".join("-".join(f"{n}({(by_no.get(n) or {}).get('style','?')}{(by_no.get(n) or {}).get('race_point') or 0:.0f})"
+                               for n in l) for l in lines_s)
+    fronts = [l for l in lines_s if l and (by_no.get(l[0]) or {}).get("style") in ("逃", "両")]
+    v["展開"] = f"並び予想[{row['line_type']}] {desc}。自力型を先頭とするライン{len(fronts)}本。" + \
+        ("主導権争いが激化しやすい。" if len(fronts) >= 3 else "主導権は比較的まとまりやすい。")
+    fav = max(win, key=win.get) if win else None
+    if fav:
+        fl = next((l for l in lines_s if fav in l), [fav])
+        pos = fl.index(fav)
+        leader = by_no.get(fl[0]) or {}
+        v["反対意見"] = (f"本命{fav}番(市場1着率{win[fav]:.0%})。" +
+                     (f"番手/後位のため先頭{fl[0]}番(得点{leader.get('race_point') or 0:.1f})が不発なら共倒れ。" if pos > 0 else
+                      f"自力型。他ライン{len(lines_s)-1}本の先行・叩き合い、単騎の飛びつきで脚を使わされる展開に弱い。"))
+    gaps = [(n, pts_rank[n], mk_rank.get(n, 99)) for n in pts_rank if mk_rank.get(n, 99) - pts_rank[n] >= 2]
+    v["前提破壊"] = ("得点順位より市場評価が大きく低い選手: " + ", ".join(f"{n}番(得点{a}位/市場{b}位)" for n, a, b in gaps)
+                 if gaps else "得点順位と市場1着評価の順位に大きな乖離なし。")
+    hot = []
+    for e in E:
+        rec = json.loads(e["recent_orders"] or "[]")[-6:]
+        if rec and sum(1 for x in rec if 0 < x <= 2) >= 3 and mk_rank.get(e["number"], 99) >= 3:
+            hot.append(f"{e['number']}番(直近{rec})")
+    v["見落とし"] = ("直近好調だが市場3番手以下: " + ", ".join(hot)) if hot else "直近成績と市場評価の明確なずれは検出せず。"
+    return v
+
+
+# ---------------------------------------------------------------- 判断（B0/B1）
+RULE_VERSION = "v2-20261105"
+# 参照オッズ→確定オッズの下落率（2026-11-04 の B0/B1 実測の中央値。選ばれた組番の値なので保守的に使う）
+DRIFT = {"B0": {"ワイド": -0.60, "3連複": -0.55, "2車単": -0.42, "2車複": -0.41, "3連単": -0.30},
+         "B1": {"ワイド": -0.42, "3連単": -0.17, "2車複": -0.15, "2車単": -0.15, "3連複": -0.15}}
+
+
+def front_runner_note(con, row):
+    """過去31日の分析: 逃げ型の自力先頭の1着は市場がやや過小評価(比率1.05)、
+    先頭が弱いラインの番手の1着は過大評価(0.88)。該当する型かどうかを記録する（購入判断には使わない）"""
+    E = {e[0]: e for e in con.execute("SELECT number, style, race_point FROM entries WHERE race_id=? AND absent=0", (row["race_id"],))}
+    lines = [[n for x in l["entries"] for n in x["numbers"]] for l in json.loads(row["line_json"] or "[]")]
+    if not E or not lines:
+        return ""
+    top = max(E.values(), key=lambda e: e[2] or 0)
+    tl = next((l for l in lines if top[0] in l), [top[0]])
+    if tl[0] == top[0] and top[1] == "逃" and len(tl) >= 2:
+        return f"[型] 得点トップ{top[0]}番が逃げ型の自力先頭（先行1着がやや割安になりやすい型）。"
+    if len(tl) >= 2 and tl[1] == top[0] and (E.get(tl[0], (0, 0, 0))[2] or 0) <= (top[2] or 0):
+        return f"[型] 得点トップ{top[0]}番が番手で先頭{tl[0]}番が格下（番手1着が買いかぶられやすい型）。"
+    return ""
+
+
+def decide(con, row, phase, odds, meta, nk_odds):
+    close = row["close_at"]
+    mins = (close - time.time()) / 60
+    if phase == "B0" and not (30 <= mins <= 90):
+        return None
+    if phase == "B1" and not (0.5 <= mins < 30):
+        return None
+    rows = evaluate(odds)
+    views = six_views(con, row, odds, rows) if rows else {}
+    # 検証
+    issues = []
+    try:
+        age = (now() - dt.datetime.strptime(meta["source_updated_at"], "%Y-%m-%d %H:%M:%S").replace(tzinfo=JST)).total_seconds() / 60
+        if age > 10:
+            issues.append(f"オッズ更新から{age:.0f}分経過")
+    except Exception:
+        issues.append("オッズ更新時刻不明")
+    n_none = sum(1 for o in odds["3連単"].values() if o[0] >= 9999)
+    if n_none:
+        issues.append(f"3連単で票なし{n_none}点")
+    diffs = []
+    if nk_odds:
+        for bt in BET_TYPES:
+            for c, o in odds[bt].items():
+                x = nk_odds[bt].get(c)
+                if x and o[0] and abs(x[0] - o[0]) / o[0] > 0.05:
+                    diffs.append((bt, c, o[0], x[0]))
+        if diffs:
+            issues.append(f"WINTICKET/netkeirin で5%超の差 {len(diffs)}件（更新タイミング差の可能性）")
+    else:
+        issues.append("netkeirin照合不可")
+    views["検証"] = "; ".join(issues) or "鮮度・照合とも問題なし"
+    # 候補（ルール v2: 2026-11-04 の検証結果を反映）
+    #  - 参照オッズに「確定までの下落率」を掛けた想定オッズで EV を評価する
+    #  - 過去31日で回収率が極端に低い帯（3連単300倍以上、ワイド10〜50倍）と FII のワイドは除外する
+    for r in rows:
+        f = 1 + DRIFT[phase].get(r["bet_type"], -0.3)
+        r["odds_adj"] = r["odds"] * f
+        r["ev1"], r["ev2"], r["evc"] = r["ev1"] * f, r["ev2"] * f, r["evc"] * f
+        r["rating"] = rate(r)
+    def excluded(r):
+        return ((r["bet_type"] == "3連単" and r["odds"] >= 300) or
+                (r["bet_type"] == "ワイド" and (10 <= r["odds"] <= 50 or row["grade"] == "FII")))
+    cands = sorted([r for r in rows if r["rating"] != "C" and not excluded(r)], key=lambda r: -r["evc"])
+    if row["grade"] == "FII":
+        cands = [r for r in cands if r["rating"] in ("A+", "A")]
+    views["展開"] = views.get("展開", "") + " " + front_runner_note(con, row)
+    if any("票なし" in s for s in issues) and n_none > 20:
+        cands = []  # 未成熟プールでは購入しない
+    disagreeing = {(bt, c) for bt, c, _, _ in diffs}
+    cands = [r for r in cands if (r["bet_type"], r["combo"]) not in disagreeing]
+    picks, used, total = [], set(), 0
+    for r in cands:
+        key = tuple(sorted(r["combo"].split("-")))
+        if key in used:
+            continue
+        stake = {"A+": 300, "A": 200, "B": 100}[r["rating"]]
+        if total + stake > 1000 or len(picks) >= 5:
+            break
+        picks.append((r, stake)); used.add(key); total += stake
+    race_rating = picks[0][0]["rating"] if picks else "C"
+    top = sorted(rows, key=lambda r: -r["evc"])[:3]
+    views["統合"] = (f"{len(picks)}点 計{total}円で購入（評価{race_rating}）。" if picks else "見送り（購入価値を確認できない）。") + \
+        " 上位EV: " + ", ".join(f"{r['bet_type']}{r['combo']} {r['odds']}倍 p={r['p']:.3f} EVc={r['evc']:.2f}" for r in top) + \
+        "。確率は3連単/2車単/3連複プール間の整合性から導いた市場由来の推定で、独立に校正された勝率モデルではない。" + \
+        f" EVは確定までの想定下落を反映（ルール{RULE_VERSION}）。"
+    reason = json.dumps(views, ensure_ascii=False)
+    created = now().isoformat(timespec="seconds")
+    recs = [(r["bet_type"], r["combo"], s, r["odds"], r["p"], r["ev1"], r["ev2"], r["rating"]) for r, s in picks] or \
+        [("見送り", "", 0, None, None, None, None, "C")]
+    for bt, c, s, o, p, e1, e2, rt in recs:
+        sha = hashlib.sha256(f"{row['race_id']}|{phase}|{created}|{bt}|{c}|{s}|{o}".encode()).hexdigest()[:16]
+        con.execute("""INSERT INTO predictions(race_id,phase,created_at,close_at,minutes_to_close,bet_type,combo,stake,
+            ref_odds,ref_source,ref_odds_fetched_at,ref_source_updated_at,model_prob,ev_a10,ev_a115,bet_rating,race_rating,reason,sha)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    (row["race_id"], phase, created, ts(close), round(mins, 1), bt, c, s, o, meta["source"],
+                     meta["fetched_at"], meta["source_updated_at"], p, e1, e2, rt, race_rating, reason, sha))
+    con.commit()
+    # 読み戻し確認
+    back = con.execute("SELECT COUNT(*), SUM(stake) FROM predictions WHERE race_id=? AND phase=? AND created_at=?",
+                       (row["race_id"], phase, created)).fetchone()
+    assert back[0] == len(recs) and (back[1] or 0) == total, "predictions read-back mismatch"
+    return {"race_rating": race_rating, "n": len(picks), "total": total, "views": views}

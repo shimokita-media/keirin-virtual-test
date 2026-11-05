@@ -1,0 +1,9 @@
+keirin.sqlite
+*.sqlite.gz
+*.log
+*.err
+logs/
+out/
+deploy/keirin_deploy.tar.gz
+__pycache__/
+notion_pages.json

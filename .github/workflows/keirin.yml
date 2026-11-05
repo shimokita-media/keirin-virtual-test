@@ -1,0 +1,80 @@
+name: keirin-daily
+# 競輪 仮想試験（実投票なし）。1日を3回のジョブ（各5時間45分まで）でつなぐ。
+# データベースはリリース "db" に keirin.sqlite.gz として保存し、毎回ダウンロード→更新→アップロードする。
+on:
+  schedule:
+    - cron: "0 22 * * *"   # 07:00 JST
+    - cron: "45 3 * * *"   # 12:45 JST
+    - cron: "30 9 * * *"   # 18:30 JST（日付をまたいで最終レースの結果まで）
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "run=通常実行 / test=接続テストのみ（DBは更新しない）"
+        default: "test"
+        type: choice
+        options: [test, run]
+
+concurrency:
+  group: keirin
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+env:
+  TZ: Asia/Tokyo
+  PYTHONIOENCODING: utf-8
+  GH_TOKEN: ${{ github.token }}
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 355
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: deploy/requirements.txt
+      - run: pip install -q -r deploy/requirements.txt
+
+      - name: 接続テスト
+        run: |
+          for u in "https://www.winticket.jp/keirin/racecard/" "https://keirin.netkeiba.com/race/race_list/"; do
+            echo "$u -> $(curl -s -o /dev/null -w '%{http_code}' -A 'Mozilla/5.0' "$u")"
+          done
+          python - <<'PY'
+          import kr, os, tempfile
+          kr.BASE = tempfile.mkdtemp()
+          con = kr.db()
+          print("開催一覧の取得テスト (開催数, レース数):", kr.fetch_daily(con))
+          PY
+
+      - name: データベースを取得
+        if: github.event_name == 'schedule' || inputs.mode == 'run'
+        run: |
+          gh release download db -p keirin.sqlite.gz --clobber && gunzip -f keirin.sqlite.gz || echo "DBなし（新規作成）"
+          ls -la keirin.sqlite || true
+
+      - name: 前日分の結果を補完（朝のジョブのみ）
+        if: (github.event_name == 'schedule' || inputs.mode == 'run') && github.event.schedule == '0 22 * * *'
+        run: python -c "import backfill,datetime as d;y=(d.date.today()-d.timedelta(1)).strftime('%Y%m%d');backfill.main(y,y)"
+
+      - name: 当日ループ
+        if: github.event_name == 'schedule' || inputs.mode == 'run'
+        env:
+          KEIRIN_MAX_SEC: "19800"   # 5時間30分で区切って次のジョブへ引き継ぐ
+        run: python run_day.py
+
+      - name: データベースとレポートを保存
+        if: always() && (github.event_name == 'schedule' || inputs.mode == 'run')
+        run: |
+          python export.py || true
+          gzip -kf keirin.sqlite
+          gh release upload db keirin.sqlite.gz --clobber
+          mkdir -p reports && cp out/*.md reports/ 2>/dev/null || true
+          git config user.name "keirin-bot"
+          git config user.email "keirin-bot@users.noreply.github.com"
+          git add reports
+          git diff --cached --quiet || (git commit -m "reports $(date '+%F %H:%M')" && git push)
