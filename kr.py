@@ -429,7 +429,42 @@ def test_track(con, row, odds, meta, rows, mins, excluded):
                 if o and o[0] < 9999 and not any(p[0] == bt and p[1] == combo for p in picks):
                     r = next((x for x in rows if x["bet_type"] == bt and x["combo"] == combo), None)
                     picks.append((bt, combo, stake, o[0], r and r["p"], r and r["ev1"], r and r["ev2"], "先行型"))
+        # 番手人気型（2026-11-06〜）: 得点トップが番手で、先頭が逃げ型 → 先頭1着の2車単を他の全員へ各100円
+        # 過去31日: 先頭がやや弱いラインの番手1着は過大評価(比率0.88)、逃げ型先頭の1着は過小評価(1.05)
+        elif tl and len(tl) >= 2 and tl[1] == top[0] and E.get(tl[0]) and E[tl[0]][1] == "逃":
+            lead = tl[0]
+            for n in sorted(E):
+                combo = f"{lead}-{n}"
+                o = odds["2車単"].get(combo)
+                if n != lead and o and o[0] < 9999:
+                    r = next((x for x in rows if x["bet_type"] == "2車単" and x["combo"] == combo), None)
+                    picks.append(("2車単", combo, 100, o[0], r and r["p"], r and r["ev1"], r and r["ev2"], "番手人気型"))
+    # 15点枠 B1T15: 想定EV順に15点（各100円）。bet_rating に順位 #1〜#15 を入れ、上位k点ごとの的中率・回収率を比較する
+    ranked = sorted([r for r in ok if r["p"] >= 0.01], key=lambda r: -r["evc"])[:15]
+    picks15 = [(r["bet_type"], r["combo"], 100, r["odds"], r["p"], r["ev1"], r["ev2"], f"#{i + 1:02d}")
+               for i, r in enumerate(ranked)]
     created = now().isoformat(timespec="seconds")
+    for bt, c, s, o, p, e1, e2, tag in picks15:
+        sha = hashlib.sha256(f"{row['race_id']}|B1T15|{created}|{bt}|{c}|{s}|{o}".encode()).hexdigest()[:16]
+        con.execute("""INSERT INTO predictions(race_id,phase,created_at,close_at,minutes_to_close,bet_type,combo,stake,
+            ref_odds,ref_source,ref_odds_fetched_at,ref_source_updated_at,model_prob,ev_a10,ev_a115,bet_rating,race_rating,reason,sha)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    (row["race_id"], "B1T15", created, ts(row["close_at"]), round(mins, 1), bt, c, s, o, meta["source"],
+                     meta["fetched_at"], meta["source_updated_at"], p, e1, e2, tag, "T",
+                     json.dumps({"検証買い15点": f"想定EV順の{tag}（データ蓄積用の別枠。ルール{RULE_VERSION}）"}, ensure_ascii=False), sha))
+    # 万車券枠 B1M: 倍率100倍以上（払戻1万円以上）の組番から、推定的中率（α=1.15）の高い順に5点（各100円）
+    m2 = model_probs(odds, 1.15) or {}
+    big = [r for r in rows if r["odds"] >= 100]
+    for r in big:
+        r["p2"] = m2.get(r["bet_type"], {}).get(r["combo"], 0)
+    for i, r in enumerate(sorted(big, key=lambda r: -r["p2"])[:5]):
+        sha = hashlib.sha256(f"{row['race_id']}|B1M|{created}|{r['bet_type']}|{r['combo']}|{r['odds']}".encode()).hexdigest()[:16]
+        con.execute("""INSERT INTO predictions(race_id,phase,created_at,close_at,minutes_to_close,bet_type,combo,stake,
+            ref_odds,ref_source,ref_odds_fetched_at,ref_source_updated_at,model_prob,ev_a10,ev_a115,bet_rating,race_rating,reason,sha)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    (row["race_id"], "B1M", created, ts(row["close_at"]), round(mins, 1), r["bet_type"], r["combo"], 100,
+                     r["odds"], meta["source"], meta["fetched_at"], meta["source_updated_at"], r["p2"], r["ev1"], r["ev2"],
+                     f"#{i + 1}", "M", json.dumps({"万車券枠": f"100倍以上で推定的中率{i + 1}位"}, ensure_ascii=False), sha))
     for bt, c, s, o, p, e1, e2, tag in picks:
         sha = hashlib.sha256(f"{row['race_id']}|B1T|{created}|{bt}|{c}|{s}|{o}".encode()).hexdigest()[:16]
         con.execute("""INSERT INTO predictions(race_id,phase,created_at,close_at,minutes_to_close,bet_type,combo,stake,
