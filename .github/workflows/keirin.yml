@@ -13,6 +13,9 @@ on:
         default: "test"
         type: choice
         options: [test, run]
+      max_sec:
+        description: "当日ループの実行秒数（試験用。通常は19800=5時間30分）"
+        default: "19800"
 
 concurrency:
   group: keirin
@@ -68,7 +71,7 @@ jobs:
       - name: 当日ループ
         if: github.event_name == 'schedule' || inputs.mode == 'run'
         env:
-          KEIRIN_MAX_SEC: "19800"   # 5時間30分で区切って次のジョブへ引き継ぐ
+          KEIRIN_MAX_SEC: ${{ inputs.max_sec || '19800' }}   # 5時間30分で区切って次のジョブへ引き継ぐ
         run: python run_day.py
 
       - name: データベースとレポートを保存
