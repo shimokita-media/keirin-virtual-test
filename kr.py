@@ -408,6 +408,39 @@ def front_runner_note(con, row):
     return ""
 
 
+def test_track(con, row, odds, meta, rows, mins, excluded):
+    """検証買い B1T（データを貯めるための別枠。B0/B1 とは別集計）。B1 と同時刻・同オッズで全レース記録する。
+    1) 想定EV最上位（除外帯を除く）に200円
+    2) 得点トップの逃げ型が自力先頭のレース: 先頭→番手 2車単 200円、先頭-番手-3番手 3連単 100円"""
+    picks = []
+    ok = [r for r in rows if not excluded(r)]
+    if ok:
+        b = max(ok, key=lambda r: r["evc"])
+        picks.append((b["bet_type"], b["combo"], 200, b["odds"], b["p"], b["ev1"], b["ev2"], "EV上位"))
+    E = {e[0]: e for e in con.execute("SELECT number, style, race_point FROM entries WHERE race_id=? AND absent=0", (row["race_id"],))}
+    lines = [[n for x in l["entries"] for n in x["numbers"]] for l in json.loads(row["line_json"] or "[]")]
+    if E and lines:
+        top = max(E.values(), key=lambda e: e[2] or 0)
+        tl = next((l for l in lines if top[0] in l), [])
+        if tl and tl[0] == top[0] and top[1] == "逃" and len(tl) >= 2:
+            for bt, combo, stake in [("2車単", f"{tl[0]}-{tl[1]}", 200)] + \
+                    ([("3連単", f"{tl[0]}-{tl[1]}-{tl[2]}", 100)] if len(tl) >= 3 else []):
+                o = odds[bt].get(combo)
+                if o and o[0] < 9999 and not any(p[0] == bt and p[1] == combo for p in picks):
+                    r = next((x for x in rows if x["bet_type"] == bt and x["combo"] == combo), None)
+                    picks.append((bt, combo, stake, o[0], r and r["p"], r and r["ev1"], r and r["ev2"], "先行型"))
+    created = now().isoformat(timespec="seconds")
+    for bt, c, s, o, p, e1, e2, tag in picks:
+        sha = hashlib.sha256(f"{row['race_id']}|B1T|{created}|{bt}|{c}|{s}|{o}".encode()).hexdigest()[:16]
+        con.execute("""INSERT INTO predictions(race_id,phase,created_at,close_at,minutes_to_close,bet_type,combo,stake,
+            ref_odds,ref_source,ref_odds_fetched_at,ref_source_updated_at,model_prob,ev_a10,ev_a115,bet_rating,race_rating,reason,sha)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    (row["race_id"], "B1T", created, ts(row["close_at"]), round(mins, 1), bt, c, s, o, meta["source"],
+                     meta["fetched_at"], meta["source_updated_at"], p, e1, e2, tag, "T",
+                     json.dumps({"検証買い": f"{tag}（データ蓄積用の別枠。ルール{RULE_VERSION}）"}, ensure_ascii=False), sha))
+    con.commit()
+
+
 def decide(con, row, phase, odds, meta, nk_odds):
     close = row["close_at"]
     mins = (close - time.time()) / 60
@@ -490,4 +523,6 @@ def decide(con, row, phase, odds, meta, nk_odds):
     back = con.execute("SELECT COUNT(*), SUM(stake) FROM predictions WHERE race_id=? AND phase=? AND created_at=?",
                        (row["race_id"], phase, created)).fetchone()
     assert back[0] == len(recs) and (back[1] or 0) == total, "predictions read-back mismatch"
+    if phase == "B1":
+        test_track(con, row, odds, meta, rows, mins, excluded)
     return {"race_rating": race_rating, "n": len(picks), "total": total, "views": views}
