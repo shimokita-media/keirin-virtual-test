@@ -25,6 +25,7 @@ env:
   TZ: Asia/Tokyo
   PYTHONIOENCODING: utf-8
   GH_TOKEN: ${{ github.token }}
+  KEIRIN_DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
 
 jobs:
   run:
@@ -48,7 +49,10 @@ jobs:
           import kr, os, tempfile
           kr.BASE = tempfile.mkdtemp()
           con = kr.db()
-          print("開催一覧の取得テスト (開催数, レース数):", kr.fetch_daily(con))
+          res = kr.fetch_daily(con)
+          print("開催一覧の取得テスト (開催数, レース数):", res)
+          import notify
+          notify.discord(f"【接続テスト】GitHub から競輪サイトに接続できました。本日 {res[0]}開催・{res[1]}レース")
           PY
 
       - name: データベースを取得

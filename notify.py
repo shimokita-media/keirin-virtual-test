@@ -6,8 +6,38 @@ import subprocess
 import sys
 
 import kr
+import requests
 
 DESKTOP = os.path.join(os.path.expanduser("~"), "Desktop")
+
+
+def discord(text):
+    """環境変数 KEIRIN_DISCORD_WEBHOOK（GitHub のシークレット）に設定された Discord に送る。未設定なら何もしない"""
+    url = os.environ.get("KEIRIN_DISCORD_WEBHOOK")
+    if not url:
+        return
+    for i in range(0, len(text), 1900):  # Discord は1通2000文字まで
+        try:
+            requests.post(url, json={"content": text[i:i + 1900]}, timeout=15)
+        except Exception:
+            pass
+
+
+def result_message(con, rid):
+    """法則枠で買い目があったレースの結果を1通にまとめる"""
+    r = con.execute("SELECT venue, race_no FROM races WHERE race_id=?", (rid,)).fetchone()
+    res = [x[0] for x in con.execute("SELECT number FROM results WHERE race_id=? AND rank BETWEEN 1 AND 3 ORDER BY rank", (rid,))]
+    buys = con.execute("SELECT bet_type, combo FROM predictions WHERE race_id=? AND phase='B1R' AND stake>0", (rid,)).fetchall()
+    if not buys or not res:
+        return None
+    lines, ret = [], 0
+    for bt, cb in buys:
+        p = con.execute("SELECT payout FROM payouts WHERE race_id=? AND bet_type=? AND combo=?", (rid, bt, cb)).fetchone()
+        ret += p[0] if p else 0
+        lines.append(f"{bt}{cb} {'◎ ' + format(p[0], ',') + '円' if p else '×'}")
+    head = f"【結果】{r[0]}{r[1]}R 着順 {'-'.join(map(str, res))}"
+    tail = f"投資 {len(buys) * 100:,}円 → 払戻 {ret:,}円（{ret - len(buys) * 100:+,}円）"
+    return "\n".join([head, " / ".join(lines), tail])
 
 
 def toast(title, body):

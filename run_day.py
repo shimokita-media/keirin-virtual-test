@@ -73,6 +73,10 @@ def tick(con, done_results):
                         picks, cond, m = out
                         say("B1R", r["venue"], r["race_no"], "R", len(picks), "点", cond)
                         if picks:
+                            msg = [f"【買い目】{r['venue']}{r['race_no']}R 締切 {kr.ts(r['close_at'])[11:16]}（あと{m:.0f}分）"]
+                            msg += [f"・{p['bet_type']} {p['combo']}  {p['odds']}倍" for p in picks]
+                            msg.append(f"（{cond}／各100円の仮想記録と同じ内容）")
+                            notify.discord("\n".join(msg))
                             notify.toast(f"競輪 {r['venue']}{r['race_no']}R 締切{kr.ts(r['close_at'])[11:16]}（あと{m:.0f}分）",
                                          " / ".join(f"{p['bet_type']}{p['combo']} {p['odds']}倍" for p in picks))
                         notify.write_today(con, DAY)
@@ -92,6 +96,9 @@ def tick(con, done_results):
                     done_results.add(rid); say("result", r["venue"], r["race_no"], "R")
                     if has(con, rid, "B1R"):
                         notify.write_today(con, DAY)
+                        msg = notify.result_message(con, rid)
+                        if msg:
+                            notify.discord(msg)
         except Exception:
             say("ERR", rid, traceback.format_exc()[-400:])
 
@@ -133,6 +140,10 @@ def main():
             break
         time.sleep(30)
     say("finished")
+    try:
+        notify.discord("【本日のまとめ】\n" + notify.write_today(con, DAY))
+    except Exception:
+        pass
     keep_awake(False)
     import subprocess
     finished_all = all(r["race_id"] in done or r["status"] == 9 for r in rows(con))
