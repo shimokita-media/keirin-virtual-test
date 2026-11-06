@@ -69,16 +69,22 @@ def tick(con, done_results):
                 if odds and odds["3連単"]:
                     r = con.execute("SELECT * FROM races WHERE race_id=?", (rid,)).fetchone()
                     out = kr.record_rule(con, r, odds, meta)
+                    wide = kr.record_wide(con, r, odds, meta) or []
                     if out:
                         picks, cond, m = out
-                        say("B1R", r["venue"], r["race_no"], "R", len(picks), "点", cond)
-                        if picks:
+                        say("B1R", r["venue"], r["race_no"], "R", len(picks), "点", cond, "/ B1W", len(wide), "点")
+                        if picks or wide:
                             msg = [f"【買い目】{r['venue']}{r['race_no']}R 締切 {kr.ts(r['close_at'])[11:16]}（あと{m:.0f}分）"]
-                            msg += [f"・{p['bet_type']} {p['combo']}  {p['odds']}倍" for p in picks]
+                            if picks:
+                                msg.append("▼法則枠")
+                                msg += [f"・{p['bet_type']} {p['combo']}  {p['odds']}倍" for p in picks]
+                            if wide:
+                                msg.append("▼ワイド枠")
+                                msg += [f"・ワイド {p['combo']}  {p['odds']}倍" for p in wide]
                             msg.append(f"（{cond}／各100円の仮想記録と同じ内容）")
                             notify.discord("\n".join(msg))
                             notify.toast(f"競輪 {r['venue']}{r['race_no']}R 締切{kr.ts(r['close_at'])[11:16]}（あと{m:.0f}分）",
-                                         " / ".join(f"{p['bet_type']}{p['combo']} {p['odds']}倍" for p in picks))
+                                         " / ".join(f"{p['bet_type']}{p['combo']} {p['odds']}倍" for p in picks + wide))
                         notify.write_today(con, DAY)
             elif not ONLY_RULE and B1_WINDOW[0] <= mins <= B1_WINDOW[1] and not has(con, rid, "B1"):
                 rd, odds, meta = kr.fetch_race(con, r, "B1")

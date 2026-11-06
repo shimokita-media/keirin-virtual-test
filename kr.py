@@ -456,6 +456,35 @@ def record_rule(con, row, odds, meta):
     return picks, cond, mins
 
 
+def record_wide(con, row, odds, meta):
+    """ワイド枠 B1W（2026-11-06〜）。過去32日の確定オッズで、前半・後半とも100%超だった
+    「ワイド × 倍率6〜10倍 × 3連単から見た割安度0.85以上」を全レース対象で各100円（最大5点）。
+    法則枠と同じ締切4〜7分前に判断して記録し、読み戻しで一致を確認する"""
+    mins = (row["close_at"] - time.time()) / 60
+    if not (3.0 <= mins <= 8.0):
+        return None
+    picks = [r for r in evaluate(odds) if r["bet_type"] == "ワイド" and 6 <= r["odds"] <= 10 and r["evc"] >= 0.85]
+    picks.sort(key=lambda r: -r["evc"])
+    picks = picks[:5]
+    created = now().isoformat(timespec="seconds")
+    recs = [(r["combo"], 100, r["odds"], r["p"], r["ev1"], r["ev2"], f"割安度{r['evc']:.2f}") for r in picks] \
+        or [("", 0, None, None, None, None, "C")]
+    for c, s, o, p, e1, e2, tag in recs:
+        bt = "ワイド" if s else "見送り"
+        sha = hashlib.sha256(f"{row['race_id']}|B1W|{created}|{c}|{s}|{o}".encode()).hexdigest()[:16]
+        con.execute("""INSERT INTO predictions(race_id,phase,created_at,close_at,minutes_to_close,bet_type,combo,stake,
+            ref_odds,ref_source,ref_odds_fetched_at,ref_source_updated_at,model_prob,ev_a10,ev_a115,bet_rating,race_rating,reason,sha)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    (row["race_id"], "B1W", created, ts(row["close_at"]), round(mins, 1), bt, c, s, o, meta["source"],
+                     meta["fetched_at"], meta["source_updated_at"], p, e1, e2, tag, "W" if picks else "C",
+                     json.dumps({"ワイド枠": "ワイド6〜10倍・割安度0.85以上"}, ensure_ascii=False), sha))
+    con.commit()
+    n = con.execute("SELECT COUNT(*) FROM predictions WHERE race_id=? AND phase='B1W' AND created_at=?",
+                    (row["race_id"], created)).fetchone()[0]
+    assert n == len(recs), "B1W read-back mismatch"
+    return picks
+
+
 def test_track(con, row, odds, meta, rows, mins, excluded):
     """検証買い B1T（データを貯めるための別枠。B0/B1 とは別集計）。B1 と同時刻・同オッズで全レース記録する。
     1) 想定EV最上位（除外帯を除く）に200円

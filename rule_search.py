@@ -51,7 +51,7 @@ def build():
             same = len({pos.get(n, (None,))[0] for n in nums}) == 1 and li_f is not None
             rows.append({
                 "race_id": rid, "date": ri.date, "日程": ri["日程"], "級班": ri["class"], "車立て": ncar,
-                "券種": r["bet_type"], "倍率": r["odds"], "人気": r["pop"], "推定確率": r["p"], "見込み倍率比": r["evc"],
+                "券種": r["bet_type"], "combo": r["combo"], "倍率": r["odds"], "人気": r["pop"], "推定確率": r["p"], "見込み倍率比": r["evc"],
                 "先頭車の位置": pos_f if r["bet_type"] in ("3連単", "2車単") else "対象外",
                 "先頭車の脚質": (e.style.get(f) if f in e.index else None) if r["bet_type"] in ("3連単", "2車単") else "対象外",
                 "先頭車が得点1位": (f == top) if r["bet_type"] in ("3連単", "2車単") else None,
