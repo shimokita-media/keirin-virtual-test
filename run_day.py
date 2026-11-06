@@ -178,6 +178,10 @@ def main():
             m = notify.metrics(con)
             if m:
                 notify.discord(m)
+            # 日曜日は、その週（月〜日）の週次レポートも送る
+            if kr.dt.datetime.strptime(DAY, "%Y%m%d").weekday() == 6:
+                import weekly
+                notify.discord(weekly.main(DAY))
         except Exception:
             pass
     import subprocess
