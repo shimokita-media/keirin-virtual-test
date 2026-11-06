@@ -84,15 +84,7 @@ def tick(con, done_results):
                         say("B1R", r["venue"], r["race_no"], "R", len(picks), "点", cond, "/ B1W", len(wide), "点")
                         show_rule = picks if NOTIFY_RULE else []
                         if show_rule or wide:
-                            msg = [f"【買い目】{r['venue']}{r['race_no']}R 締切 {kr.ts(r['close_at'])[11:16]}（あと{m:.0f}分）"]
-                            if show_rule:
-                                msg.append("▼法則枠")
-                                msg += [f"・{p['bet_type']} {p['combo']}  {p['odds']}倍" for p in show_rule]
-                            if wide:
-                                msg.append("▼ワイド枠")
-                                msg += [f"・ワイド {p['combo']}  {p['odds']}倍" for p in wide]
-                            msg.append("（各100円の仮想記録と同じ内容）")
-                            notify.discord(chr(10).join(msg))
+                            notify.discord(notify.picks_message(r, kr.ts(r["close_at"])[11:16], m, show_rule, wide))
                             notify.toast(f"競輪 {r['venue']}{r['race_no']}R 締切{kr.ts(r['close_at'])[11:16]}（あと{m:.0f}分）",
                                          " / ".join(f"{p['bet_type']}{p['combo']} {p['odds']}倍" for p in show_rule + wide))
                         notify.write_today(con, DAY)
@@ -129,10 +121,10 @@ def heartbeat(con):
     n_race, n_pick = con.execute("""SELECT COUNT(DISTINCT race_id), COALESCE(SUM(stake > 0), 0) FROM predictions
                                     WHERE phase='B1W' AND created_at >= ?""", (since,)).fetchone()
     nxt = [r for r in rs if r["close_at"] > t + 4 * 60]
-    msg = f"【稼働中】{kr.now():%H:%M} 直近1時間で {n_race}レースを判断、ワイド枠の買い目 {n_pick}点"
+    msg = f"⏱️ 稼働中 {kr.now():%H:%M}｜この1時間：{n_race}レース判断・ワイド枠の買い目 {n_pick}点"
     if nxt:
         r = nxt[0]
-        msg += f"／次の判断 {r['venue']}{r['race_no']}R（締切 {kr.ts(r['close_at'])[11:16]}）"
+        msg += f"｜次は {r['venue']} {r['race_no']}R（締切 {kr.ts(r['close_at'])[11:16]}）"
     notify.discord(msg)
 
 
@@ -149,12 +141,14 @@ def morning(con):
     t = time.time()
     nxt = [r for r in rs if r["close_at"] > t + 4 * 60]
     venues = sorted({r["venue"] for r in rs})
-    msg = [f"【おはようございます】{DAY[4:6]}/{DAY[6:]} は {len(venues)}開催・{len(rs)}レース（{'・'.join(venues)}）"]
+    w = "月火水木金土日"[kr.dt.datetime.strptime(DAY, "%Y%m%d").weekday()]
+    msg = [f"☀️ **おはようございます！** {DAY[4:6]}/{DAY[6:]}（{w}）",
+           f"🏟️ 今日は **{len(venues)}開催・{len(rs)}レース**", f"　{'・'.join(venues)}"]
     if nxt:
-        msg.append(f"最初の判断: {nxt[0]['venue']}{nxt[0]['race_no']}R（締切 {kr.ts(nxt[0]['close_at'])[11:16]}、その2〜3分前に通知）")
+        msg.append(f"⏰ 最初の通知：{nxt[0]['venue']} {nxt[0]['race_no']}R（締切 {kr.ts(nxt[0]['close_at'])[11:16]} の2〜3分前）")
     repo = os.environ.get("GITHUB_REPOSITORY")
     if repo:
-        msg.append(f"毎日の一覧（前日までのレース・選手・全オッズ）: https://github.com/{repo}/releases/tag/tables")
+        msg.append(f"📂 前日までの一覧（レース・選手・全オッズ）→ https://github.com/{repo}/releases/tag/tables")
     notify.discord(chr(10).join(msg))
     con.execute("INSERT OR IGNORE INTO notices VALUES(?, 'morning')", (DAY,))
     con.commit()
@@ -235,7 +229,8 @@ def main():
     if rs_all and all(con.execute("SELECT 1 FROM payouts WHERE race_id=?", (r["race_id"],)).fetchone()
                       or r["status"] == 9 for r in rs_all):
         try:
-            notify.discord("【本日のまとめ】\n" + notify.write_today(con, DAY))
+            notify.write_today(con, DAY)
+            notify.discord(notify.day_summary(con, DAY))
             m = notify.metrics(con)
             if m:
                 notify.discord(m)

@@ -7,4 +7,6 @@ import notify
 days = sys.argv[1].split()
 url = sys.argv[2]
 label = "・".join(f"{d[4:6]}/{d[6:]}" for d in days)
-notify.discord(f"【毎日の一覧】{label} 分のレース一覧・選手一覧・全オッズのCSVができました（Excelで開けます）\n{url}")
+notify.discord("\n".join([f"📂 **毎日の一覧ができました**（{label}分）",
+                          "　レース一覧・選手一覧・全オッズ（Excelで開けます）",
+                          f"　{url}"]))

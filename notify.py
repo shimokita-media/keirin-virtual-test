@@ -50,27 +50,78 @@ def discord(text):
 LABEL = {"B1R": "法則枠", "B1W": "ワイド枠"}
 
 
+def yen(n):
+    return f"{n:,}円"
+
+
+def signed(n):
+    return f"＋{n:,}円" if n > 0 else (f"−{-n:,}円" if n < 0 else "±0円")
+
+
+def picks_message(r, close_hm, mins, rule, wide):
+    """買い目の通知（見やすい形・絵文字つき）"""
+    L = [f"🚴 **{r['venue']} {r['race_no']}R**　⏰ 締切 {close_hm}（あと{mins:.0f}分）"]
+    if wide:
+        L.append("🎯 **ワイド枠**")
+        L += [f"　・**{p['combo']}**　{p['odds']}倍" for p in wide]
+    if rule:
+        L.append("📐 **法則枠**")
+        L += [f"　・{p['bet_type']} **{p['combo']}**　{p['odds']}倍" for p in rule]
+    L.append("💴 各100円（仮想記録と同じ内容）")
+    return chr(10).join(L)
+
+
 def result_message(con, rid, phases=None):
-    """法則枠・ワイド枠で買い目があったレースの結果を1通にまとめる（枠ごとに損益を出す）"""
+    """買い目があったレースの結果（見やすい形・絵文字つき）"""
     r = con.execute("SELECT venue, race_no FROM races WHERE race_id=?", (rid,)).fetchone()
     res = [x[0] for x in con.execute("SELECT number FROM results WHERE race_id=? AND rank BETWEEN 1 AND 3 ORDER BY rank", (rid,))]
     if not res:
         return None
-    out = [f"【結果】{r[0]}{r[1]}R 着順 {'-'.join(map(str, res))}"]
+    out = [f"🏁 **{r[0]} {r[1]}R**　結果 **{'-'.join(map(str, res))}**"]
+    total_inv = total_ret = 0
     for ph, label in LABEL.items():
         if phases and ph not in phases:
             continue
         buys = con.execute("SELECT bet_type, combo FROM predictions WHERE race_id=? AND phase=? AND stake>0", (rid, ph)).fetchall()
         if not buys:
             continue
-        lines, ret = [], 0
+        if not phases or len(phases) > 1:
+            out.append(f"{'🎯' if ph == 'B1W' else '📐'} {label}")
         for bt, cb in buys:
             p = con.execute("SELECT payout FROM payouts WHERE race_id=? AND bet_type=? AND combo=?", (rid, bt, cb)).fetchone()
-            ret += p[0] if p else 0
-            lines.append(f"{bt}{cb} {'◎ ' + format(p[0], ',') + '円' if p else '×'}")
-        out.append(f"▼{label}: " + " / ".join(lines))
-        out.append(f"　投資 {len(buys) * 100:,}円 → 払戻 {ret:,}円（{ret - len(buys) * 100:+,}円）")
-    return chr(10).join(out) if len(out) > 1 else None
+            total_ret += p[0] if p else 0
+            out.append(f"✅ {bt} **{cb}** → **{yen(p[0])}**" if p else f"❌ {bt} {cb}")
+        total_inv += len(buys) * 100
+    if len(out) == 1:
+        return None
+    net = total_ret - total_inv
+    out.append(f"📊 {yen(total_inv)} → {yen(total_ret)}（**{signed(net)}**）{' 🎉' if net > 0 else ''}")
+    return chr(10).join(out)
+
+
+def day_summary(con, day):
+    """1日のまとめ（Discord 用の短い版）"""
+    import datetime as _dt
+    w = "月火水木金土日"[_dt.datetime.strptime(day, "%Y%m%d").weekday()]
+    L = [f"🌙 **本日のまとめ**　{day[4:6]}/{day[6:]}（{w}）"]
+    for ph, label in LABEL.items():
+        rows = con.execute("""SELECT p.race_id, p.bet_type, p.combo, p.stake, r.venue, r.race_no,
+                   COALESCE((SELECT payout FROM payouts y WHERE y.race_id=p.race_id AND y.bet_type=p.bet_type AND y.combo=p.combo), 0)
+                   FROM predictions p JOIN races r USING(race_id) WHERE p.phase=? AND p.stake>0 AND r.date=?""", (ph, day)).fetchall()
+        if not rows:
+            L.append(f"{'🎯' if ph == 'B1W' else '📐'} {label}：買い目なし")
+            continue
+        inv = sum(x[3] for x in rows)
+        ret = sum(x[6] * x[3] // 100 for x in rows)
+        hits = [x for x in rows if x[6]]
+        L.append(f"{'🎯' if ph == 'B1W' else '📐'} **{label}**{'（記録のみ）' if ph == 'B1R' else ''}")
+        L.append(f"　{len({x[0] for x in rows})}レース・{len(rows)}点・的中{len(hits)}　{yen(inv)} → {yen(ret)}（**{signed(ret - inv)}**）"
+                 f"　回収率 **{ret / inv:.0%}**")
+        if hits:
+            best = max(hits, key=lambda x: x[6])
+            L.append(f"　🏆 いちばんの当たり：{best[4]} {best[5]}R {best[1]} {best[2]}　{yen(best[6])}")
+    L.append("※ すべて仮想記録です")
+    return chr(10).join(L)
 
 
 def toast(title, body):
@@ -146,7 +197,7 @@ def metrics(con):
     ② 収支が一番良かった時からの最大のへこみ、最大の連敗数（レース単位）
     ③ 累計の回収率と95%の範囲（レース単位のブートストラップ）"""
     import numpy as np
-    out = ["【累計の指標】"]
+    out = ["📈 **累計の指標**（これまでの全記録・確定分）"]
     for ph, label in LABEL.items():
         rows = con.execute("""SELECT p.race_id, p.bet_type, p.combo, p.stake, p.ref_odds, r.close_at,
                    (SELECT payout FROM payouts y WHERE y.race_id=p.race_id AND y.bet_type=p.bet_type AND y.combo=p.combo),
@@ -176,9 +227,9 @@ def metrics(con):
         rng = np.random.default_rng(0)
         idx = rng.integers(0, len(order), (2000, len(order)))
         bs = ret[idx].sum(1) / inv[idx].sum(1)
-        out.append(f"▼{label}（{len(order)}レース・{len(rows)}点）")
+        out.append(f"{'🎯' if ph == 'B1W' else '📐'} **{label}**（{len(order)}レース・{len(rows)}点）")
         if clv:
-            out.append(f"　①-1 買った時→最終の倍率の変化: 中央値 {np.median(clv):+.0%}（{len(clv)}点。マイナスは払戻が減ったという意味）")
+            out.append(f"　📉 買った時→最終の倍率：{np.median(clv):+.0%}（マイナスは払戻が減ったという意味）")
         # 最終の倍率で計算し直した割安度（払戻は最終の倍率で決まるので、これが1.0以上なら本当に割安だった）
         fin_evc = []
         for rid in order:
@@ -192,9 +243,9 @@ def metrics(con):
             fin_evc += [ev[(x[1], x[2])] for x in rows if x[0] == rid and (x[1], x[2]) in ev]
         if fin_evc:
             fe = np.array(fin_evc)
-            out.append(f"　①-2 最終の倍率での割安度: 中央値 {np.median(fe):.2f}（1.0以上だったのは {np.mean(fe >= 1):.0%}。1.0以上が多いほど本物）")
-        out.append(f"　② 最大のへこみ {-dd:+,}円 ／ 最大の連敗 {streak}レース ／ 累計損益 {int(net[-1]):+,}円")
-        out.append(f"　③ 累計の回収率 {ret.sum() / inv.sum():.0%}（95%の範囲 {np.percentile(bs, 2.5):.0%}〜{np.percentile(bs, 97.5):.0%}）")
+            out.append(f"　💎 最終でも割安だった割合：**{np.mean(fe >= 1):.0%}**（割安度の中央値 {np.median(fe):.2f}。ここが増えるほど本物）")
+        out.append(f"　💰 累計 **{signed(int(net[-1]))}**　／ 最大のへこみ {signed(-dd)}　／ 最大の連敗 {streak}レース")
+        out.append(f"　📊 回収率 **{ret.sum() / inv.sum():.0%}**（95%の範囲 {np.percentile(bs, 2.5):.0%}〜{np.percentile(bs, 97.5):.0%}）")
     extra = [x for x in (timing_report(con, "B1W"), subgroup_report(con, "B1W")) if x]
     out += extra
     return chr(10).join(out) if len(out) > 1 else ""
@@ -239,12 +290,12 @@ def timing_report(con, ph="B1W", since=None):
                     drift[k].append(od["ワイド"][cb][0] / fin[cb][0] - 1)
                 if cb in ev:
                     value[k].append(ev[cb] >= 1.0)
-    out = [f"② 時点ごとの倍率（{LABEL.get(ph, ph)}の買い目 {len(picks)}点）　※最終と比べて何%高かったか／その時点で割安度1.0以上だった割合"]
+    out = [f"⏳ **時点ごとの倍率**（{LABEL.get(ph, ph)}の買い目 {len(picks)}点）", "　最終と比べて何%高かったか ／ その時点で割安だった割合"]
     for k, name in PHASE_LABEL:
         if drift[k] or value[k]:
             d = f"{np.median(drift[k]):+.0%}" if drift[k] and k != "POST" else "−"
             v = f"{np.mean(value[k]):.0%}" if value[k] else "−"
-            out.append(f"　{name}: 最終より {d} ／ 割安 {v}（{len(value[k])}点）")
+            out.append(f"　・{name}：{d} ／ 割安 {v}")
     return chr(10).join(out)
 
 
@@ -277,7 +328,7 @@ def subgroup_report(con, ph="B1W", since=None):
         for k, f in flags.items():
             (groups if f else rest)[k].append(pay)
     roi = lambda x: f"{sum(x) / (len(x) * 100):.0%}（{len(x)}点）" if x else "−"
-    out = [f"③ 過去データで見つけた条件の成績（{LABEL.get(ph, ph)}・確定分）　当てはまる ／ 当てはまらない"]
+    out = [f"🔍 **過去に見つけた条件の成績**（{LABEL.get(ph, ph)}）", "　当てはまる ／ 当てはまらない"]
     for k in groups:
-        out.append(f"　{k}: {roi(groups[k])} ／ {roi(rest[k])}")
+        out.append(f"　・{k}：{roi(groups[k])} ／ {roi(rest[k])}")
     return chr(10).join(out)

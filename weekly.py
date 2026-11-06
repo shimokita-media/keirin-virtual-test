@@ -83,7 +83,7 @@ def main(end=None):
     d0, d1 = (e - dt.timedelta(days=6)).strftime("%Y%m%d"), end
     p0, p1 = (e - dt.timedelta(days=13)).strftime("%Y%m%d"), (e - dt.timedelta(days=7)).strftime("%Y%m%d")
     con = kr.db()
-    L = [f"【週次レポート】{d0[4:6]}/{d0[6:]}〜{d1[4:6]}/{d1[6:]}（全て仮想記録）"]
+    L = [f"🗓️ **週次レポート** {d0[4:6]}/{d0[6:]}〜{d1[4:6]}/{d1[6:]}（全て仮想記録）"]
     for ph, label in notify.LABEL.items():
         b = bets(con, d0, d1, ph)
         s = summary(b)
@@ -92,7 +92,7 @@ def main(end=None):
             continue
         prev = summary(bets(con, p0, p1, ph))
         fv_med, fv_ok = final_value(con, b)
-        L.append(f"▼{label}（{s['races']}レース・{s['bets']}点・的中{s['hits']}）")
+        L.append(f"{'🎯' if ph == 'B1W' else '📐'} **{label}**（{s['races']}レース・{s['bets']}点・的中{s['hits']}）")
         L.append(f"　回収率 {s['roi']:.0%}（95%の範囲 {s['lo']:.0%}〜{s['hi']:.0%}）／ 損益 {int(s['ret'] - s['inv']):+,}円 ／ 最大のへこみ -{int(s['dd']):,}円")
         if prev:
             L.append(f"　前の週: 回収率 {prev['roi']:.0%}（{prev['races']}レース）→ 今週 {s['roi'] - prev['roi']:+.0%}")
