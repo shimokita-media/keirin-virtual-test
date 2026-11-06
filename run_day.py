@@ -153,6 +153,9 @@ def main():
                       or r["status"] == 9 for r in rs_all):
         try:
             notify.discord("【本日のまとめ】\n" + notify.write_today(con, DAY))
+            m = notify.metrics(con)
+            if m:
+                notify.discord(m)
         except Exception:
             pass
     import subprocess

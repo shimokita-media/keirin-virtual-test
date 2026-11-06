@@ -12,15 +12,28 @@ DESKTOP = os.path.join(os.path.expanduser("~"), "Desktop")
 
 
 def discord(text):
-    """環境変数 KEIRIN_DISCORD_WEBHOOK（GitHub のシークレット）に設定された Discord に送る。未設定なら何もしない"""
+    """環境変数 KEIRIN_DISCORD_WEBHOOK（GitHub のシークレット）に設定された Discord に送る。未設定なら何もしない。
+    失敗したら最大3回やり直し、それでも失敗したら内容をログに残す"""
     url = os.environ.get("KEIRIN_DISCORD_WEBHOOK")
     if not url:
         return
+    import time as _t
     for i in range(0, len(text), 1900):  # Discord は1通2000文字まで
-        try:
-            requests.post(url, json={"content": text[i:i + 1900]}, timeout=15)
-        except Exception:
-            pass
+        part = text[i:i + 1900]
+        for attempt in range(3):
+            try:
+                r = requests.post(url, json={"content": part}, timeout=15)
+                if r.status_code in (200, 204):
+                    print(kr.now().strftime("%H:%M:%S"), "discord sent:", part.splitlines()[0], flush=True)
+                    break
+                wait = float(r.json().get("retry_after", 2)) if r.status_code == 429 else 2
+                print(kr.now().strftime("%H:%M:%S"), "discord status", r.status_code, "retry", flush=True)
+                _t.sleep(min(wait, 10))
+            except Exception as e:
+                print(kr.now().strftime("%H:%M:%S"), "discord error", repr(e)[:200], flush=True)
+                _t.sleep(2)
+        else:
+            print(kr.now().strftime("%H:%M:%S"), "discord FAILED:", part.splitlines()[0], flush=True)
 
 
 LABEL = {"B1R": "法則枠", "B1W": "ワイド枠"}
@@ -112,3 +125,62 @@ def write_today(con, day):
         except Exception:
             pass
     return txt
+
+
+def metrics(con):
+    """法則枠・ワイド枠の累計の指標（回収率以外の見方）を文章にする
+    ① 買った倍率→最終の倍率の変化（プラスなら、後から買いが入って倍率が下がった＝先に割安なものを買えた）
+    ② 収支が一番良かった時からの最大のへこみ、最大の連敗数（レース単位）
+    ③ 累計の回収率と95%の範囲（レース単位のブートストラップ）"""
+    import numpy as np
+    out = ["【累計の指標】"]
+    for ph, label in LABEL.items():
+        rows = con.execute("""SELECT p.race_id, p.bet_type, p.combo, p.stake, p.ref_odds, r.close_at,
+                   (SELECT payout FROM payouts y WHERE y.race_id=p.race_id AND y.bet_type=p.bet_type AND y.combo=p.combo),
+                   (SELECT odds FROM odds o WHERE o.race_id=p.race_id AND o.bet_type=p.bet_type AND o.combo=p.combo
+                      AND o.phase='POST' AND o.source='winticket' ORDER BY o.fetched_at DESC LIMIT 1),
+                   (SELECT 1 FROM payouts y WHERE y.race_id=p.race_id LIMIT 1)
+                   FROM predictions p JOIN races r USING(race_id) WHERE p.phase=? AND p.stake>0 ORDER BY r.close_at""", (ph,)).fetchall()
+        rows = [x for x in rows if x[8]]  # 確定済みのみ
+        if not rows:
+            continue
+        clv = [x[7] / x[4] - 1 for x in rows if x[7] and x[4]]
+        by, order = {}, []
+        for x in rows:
+            if x[0] not in by:
+                by[x[0]] = [0, 0]
+                order.append(x[0])
+            by[x[0]][0] += x[3]
+            by[x[0]][1] += x[6] or 0
+        net = np.cumsum([by[k][1] - by[k][0] for k in order])
+        dd = int((np.maximum.accumulate(np.concatenate([[0], net])) - np.concatenate([[0], net])).max())
+        streak = cur = 0
+        for k in order:
+            cur = 0 if by[k][1] > 0 else cur + 1
+            streak = max(streak, cur)
+        inv = np.array([by[k][0] for k in order], float)
+        ret = np.array([by[k][1] for k in order], float)
+        rng = np.random.default_rng(0)
+        idx = rng.integers(0, len(order), (2000, len(order)))
+        bs = ret[idx].sum(1) / inv[idx].sum(1)
+        out.append(f"▼{label}（{len(order)}レース・{len(rows)}点）")
+        if clv:
+            out.append(f"　①-1 買った時→最終の倍率の変化: 中央値 {np.median(clv):+.0%}（{len(clv)}点。マイナスは払戻が減ったという意味）")
+        # 最終の倍率で計算し直した割安度（払戻は最終の倍率で決まるので、これが1.0以上なら本当に割安だった）
+        fin_evc = []
+        for rid in order:
+            od = {bt: {} for bt in kr.BET_TYPES}
+            for bt, cb, o in con.execute("""SELECT bet_type, combo, odds FROM odds WHERE race_id=? AND phase='POST' AND source='winticket'
+                                            AND fetched_at=(SELECT MAX(fetched_at) FROM odds WHERE race_id=? AND phase='POST' AND source='winticket')""", (rid, rid)):
+                od[bt][cb] = (o, None, None)
+            if not od["3連単"]:
+                continue
+            ev = {(e["bet_type"], e["combo"]): e["evc"] for e in kr.evaluate(od)}
+            fin_evc += [ev[(x[1], x[2])] for x in rows if x[0] == rid and (x[1], x[2]) in ev]
+        if fin_evc:
+            fe = np.array(fin_evc)
+            out.append(f"　①-2 最終の倍率での割安度: 中央値 {np.median(fe):.2f}（1.0以上だったのは {np.mean(fe >= 1):.0%}。1.0以上が多いほど本物）")
+        out.append(f"　② 最大のへこみ {-dd:+,}円 ／ 最大の連敗 {streak}レース ／ 累計損益 {int(net[-1]):+,}円")
+        out.append(f"　③ 累計の回収率 {ret.sum() / inv.sum():.0%}（95%の範囲 {np.percentile(bs, 2.5):.0%}〜{np.percentile(bs, 97.5):.0%}）")
+    return chr(10).join(out) if len(out) > 1 else ""
+
