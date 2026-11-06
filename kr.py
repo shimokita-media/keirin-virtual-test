@@ -435,7 +435,7 @@ def rule_picks(con, row, odds):
 def record_rule(con, row, odds, meta):
     """法則枠を締切4〜7分前に判断して記録する（通知と同じ内容）。読み戻しで一致を確認"""
     mins = (row["close_at"] - time.time()) / 60
-    if not (3.0 <= mins <= 8.0):
+    if not (1.5 <= mins <= 8.0):  # 2026-11-07〜 締切2〜3分前の判断も受け付ける
         return None
     picks, cond = rule_picks(con, row, odds)
     created = now().isoformat(timespec="seconds")
@@ -461,7 +461,7 @@ def record_wide(con, row, odds, meta):
     「ワイド × 倍率6〜10倍 × 3連単から見た割安度0.85以上」を全レース対象で各100円（最大5点）。
     法則枠と同じ締切4〜7分前に判断して記録し、読み戻しで一致を確認する"""
     mins = (row["close_at"] - time.time()) / 60
-    if not (3.0 <= mins <= 8.0):
+    if not (1.5 <= mins <= 8.0):  # 2026-11-07〜 締切2〜3分前の判断も受け付ける
         return None
     picks = [r for r in evaluate(odds) if r["bet_type"] == "ワイド" and 6 <= r["odds"] <= 10 and r["evc"] >= 0.85]
     picks.sort(key=lambda r: -r["evc"])

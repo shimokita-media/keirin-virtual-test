@@ -39,7 +39,7 @@ def discord(text):
 LABEL = {"B1R": "法則枠", "B1W": "ワイド枠"}
 
 
-def result_message(con, rid):
+def result_message(con, rid, phases=None):
     """法則枠・ワイド枠で買い目があったレースの結果を1通にまとめる（枠ごとに損益を出す）"""
     r = con.execute("SELECT venue, race_no FROM races WHERE race_id=?", (rid,)).fetchone()
     res = [x[0] for x in con.execute("SELECT number FROM results WHERE race_id=? AND rank BETWEEN 1 AND 3 ORDER BY rank", (rid,))]
@@ -47,6 +47,8 @@ def result_message(con, rid):
         return None
     out = [f"【結果】{r[0]}{r[1]}R 着順 {'-'.join(map(str, res))}"]
     for ph, label in LABEL.items():
+        if phases and ph not in phases:
+            continue
         buys = con.execute("SELECT bet_type, combo FROM predictions WHERE race_id=? AND phase=? AND stake>0", (rid, ph)).fetchall()
         if not buys:
             continue
@@ -90,7 +92,7 @@ def write_today(con, day):
          "※ 仮想記録と同じ内容です。実際に買うかどうか・金額はご自身の判断で、遊べる範囲で。",
          "※ 法則枠: 7車立て・本命の1着見込み30〜60%・二分戦か三分戦のレースで、3連単から見て割安なワイド",
          "※ ワイド枠: 全レースで、倍率6〜10倍・3連単から見た割安度0.85以上のワイド",
-         "※ どちらも各100円、締切4〜7分前の倍率で判断", ""]
+         "※ どちらも各100円、締切2〜3分前の倍率で判断（11/6までは4〜7分前）。Discordへの通知はワイド枠のみ", ""]
     tot = {ph: [0, 0] for ph in LABEL}
     by = {}
     for r in rows:

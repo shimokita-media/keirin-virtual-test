@@ -23,6 +23,8 @@ def keep_awake(on=True):
     except Exception:
         pass
 
+DECIDE_WINDOW = (2.0, 3.5)  # 2026-11-07〜 締切2〜3分前に判断（それまでは4〜7分前）
+NOTIFY_RULE = False  # 2026-11-07〜 法則枠は通知せず記録のみ。Discord の買い目・結果はワイド枠だけ
 ONLY_RULE = True  # 2026-11-06〜 法則枠(B1R)のみ記録（B0/B1・検証買い・万車券枠は停止。結果回収は継続）
 B0_TARGET = 45   # 締切まで45分以下(30分以上)になった最初のループで B0
 B1_WINDOW = (1.0, 4.0)  # 締切まで1〜4分で B1
@@ -63,8 +65,8 @@ def tick(con, done_results):
                     say("B0", r["venue"], r["race_no"], "R", res and (res["race_rating"], res["total"]))
                 else:
                     say("B0 skip (odds unavailable)", rid)
-            elif 4.0 <= mins <= 7.0 and not has(con, rid, "B1R"):
-                # 法則枠: 締切4〜7分前に判断し、買い目があれば通知（人が買える時間を残すため）
+            elif DECIDE_WINDOW[0] <= mins <= DECIDE_WINDOW[1] and not has(con, rid, "B1R"):
+                # 締切2〜3分前に判断。ワイド枠は通知し、法則枠は通知せず記録だけする（2026-11-07〜）
                 rd, odds, meta = kr.fetch_race(con, r, "B1R")
                 if odds and odds["3連単"]:
                     r = con.execute("SELECT * FROM races WHERE race_id=?", (rid,)).fetchone()
@@ -73,18 +75,19 @@ def tick(con, done_results):
                     if out:
                         picks, cond, m = out
                         say("B1R", r["venue"], r["race_no"], "R", len(picks), "点", cond, "/ B1W", len(wide), "点")
-                        if picks or wide:
+                        show_rule = picks if NOTIFY_RULE else []
+                        if show_rule or wide:
                             msg = [f"【買い目】{r['venue']}{r['race_no']}R 締切 {kr.ts(r['close_at'])[11:16]}（あと{m:.0f}分）"]
-                            if picks:
+                            if show_rule:
                                 msg.append("▼法則枠")
-                                msg += [f"・{p['bet_type']} {p['combo']}  {p['odds']}倍" for p in picks]
+                                msg += [f"・{p['bet_type']} {p['combo']}  {p['odds']}倍" for p in show_rule]
                             if wide:
                                 msg.append("▼ワイド枠")
                                 msg += [f"・ワイド {p['combo']}  {p['odds']}倍" for p in wide]
-                            msg.append(f"（{cond}／各100円の仮想記録と同じ内容）")
-                            notify.discord("\n".join(msg))
+                            msg.append("（各100円の仮想記録と同じ内容）")
+                            notify.discord(chr(10).join(msg))
                             notify.toast(f"競輪 {r['venue']}{r['race_no']}R 締切{kr.ts(r['close_at'])[11:16]}（あと{m:.0f}分）",
-                                         " / ".join(f"{p['bet_type']}{p['combo']} {p['odds']}倍" for p in picks + wide))
+                                         " / ".join(f"{p['bet_type']}{p['combo']} {p['odds']}倍" for p in show_rule + wide))
                         notify.write_today(con, DAY)
             elif not ONLY_RULE and B1_WINDOW[0] <= mins <= B1_WINDOW[1] and not has(con, rid, "B1"):
                 rd, odds, meta = kr.fetch_race(con, r, "B1")
@@ -102,7 +105,7 @@ def tick(con, done_results):
                     done_results.add(rid); say("result", r["venue"], r["race_no"], "R")
                     if has(con, rid, "B1R"):
                         notify.write_today(con, DAY)
-                        msg = notify.result_message(con, rid)
+                        msg = notify.result_message(con, rid, phases=None if NOTIFY_RULE else ("B1W",))
                         if msg:
                             notify.discord(msg)
         except Exception:
