@@ -65,8 +65,8 @@ jobs:
           gh release download db -p keirin.sqlite.gz --clobber && gunzip -f keirin.sqlite.gz || echo "DBなし（新規作成）"
           ls -la keirin.sqlite || true
 
-      - name: 前日分の結果を補完（朝のジョブのみ）
-        if: (github.event_name == 'schedule' || inputs.mode == 'run') && github.event.schedule == '0 22 * * *'
+      - name: 前日分の結果を補完（取りこぼした分だけ取得するので、毎回実行しても数秒で終わる）
+        if: github.event_name == 'schedule' || inputs.mode == 'run'
         run: python -c "import backfill,datetime as d;y=(d.date.today()-d.timedelta(1)).strftime('%Y%m%d');backfill.main(y,y)"
 
       - name: 当日ループ
@@ -81,6 +81,13 @@ jobs:
           python export.py || true
           gzip -kf keirin.sqlite
           gh release upload db keirin.sqlite.gz --clobber
+          # その日の一覧（レース・選手・全オッズ）ができていれば、リリース "tables" に置いて Discord に知らせる
+          if ls out/tables/*.csv >/dev/null 2>&1; then
+            gh release view tables >/dev/null 2>&1 || gh release create tables --title "毎日の一覧（レース・選手・全オッズ）" --notes "1日ごとのCSV。Excelで開けます。"
+            gh release upload tables out/tables/*.csv --clobber
+            days=$(ls out/tables/races_*.csv | sed 's/.*races_//; s/.csv//' | paste -sd ' ')
+            python notify_tables.py "$days" "https://github.com/${{ github.repository }}/releases/tag/tables"
+          fi
           mkdir -p reports && cp out/*.md reports/ 2>/dev/null || true
           git config user.name "keirin-bot"
           git config user.email "keirin-bot@users.noreply.github.com"

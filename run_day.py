@@ -126,6 +126,29 @@ def heartbeat(con):
     notify.discord(msg)
 
 
+def export_if_done(con, day):
+    """その日の全レースが確定していて、まだ一覧を作っていなければ、レース・選手・全オッズの一覧を作る。
+    作ったファイルは out/tables/ に置かれ、GitHub Actions の保存の段階でリリース "tables" にアップロードされる"""
+    con.execute("CREATE TABLE IF NOT EXISTS exports(day TEXT PRIMARY KEY, at TEXT)")
+    if con.execute("SELECT 1 FROM exports WHERE day=?", (day,)).fetchone():
+        return False
+    rs = con.execute("SELECT race_id, status FROM races WHERE date=?", (day,)).fetchall()
+    if not rs:
+        return False
+    if not all(con.execute("SELECT 1 FROM payouts WHERE race_id=?", (r[0],)).fetchone() or r[1] == 9 for r in rs):
+        return False
+    try:
+        import export_tables
+        paths = export_tables.main(day)
+        con.execute("INSERT OR REPLACE INTO exports VALUES(?,?)", (day, kr.now().isoformat(timespec="seconds")))
+        con.commit()
+        say("tables exported", day, [n for _, n in paths])
+        return True
+    except Exception:
+        say("tables export ERR", traceback.format_exc()[-300:])
+        return False
+
+
 def single_instance():
     """重複起動の防止（ローカルのポートを確保できなければ、既に動いているとみなして終了）"""
     import socket
@@ -145,6 +168,8 @@ def main():
     global START
     START = time.time()
     keep_awake(True)
+    # 前日分の一覧がまだなら作る（回の切り替わりで最終レースの確定を取り逃した日のため）
+    export_if_done(con, (kr.dt.datetime.strptime(DAY, "%Y%m%d") - kr.dt.timedelta(days=1)).strftime("%Y%m%d"))
     done = set()
     last_daily = 0
     last_beat = kr.now().strftime("%Y%m%d%H")  # 起動した時間帯は送らない
@@ -169,6 +194,7 @@ def main():
         time.sleep(30)
     say("finished")
     keep_awake(False)
+    export_if_done(con, DAY)
     # 本日のまとめは、その日の全レースが確定したときだけ送る（途中の区切りでは送らない）
     rs_all = rows(con)
     if rs_all and all(con.execute("SELECT 1 FROM payouts WHERE race_id=?", (r["race_id"],)).fetchone()
