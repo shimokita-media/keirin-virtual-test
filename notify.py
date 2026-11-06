@@ -1,5 +1,6 @@
 """法則枠の買い目を、Windows の通知と「今日の買い目」ファイル（デスクトップ）で知らせる。"""
 import base64
+import json
 import os
 import sqlite3
 import subprocess
@@ -184,5 +185,89 @@ def metrics(con):
             out.append(f"　①-2 最終の倍率での割安度: 中央値 {np.median(fe):.2f}（1.0以上だったのは {np.mean(fe >= 1):.0%}。1.0以上が多いほど本物）")
         out.append(f"　② 最大のへこみ {-dd:+,}円 ／ 最大の連敗 {streak}レース ／ 累計損益 {int(net[-1]):+,}円")
         out.append(f"　③ 累計の回収率 {ret.sum() / inv.sum():.0%}（95%の範囲 {np.percentile(bs, 2.5):.0%}〜{np.percentile(bs, 97.5):.0%}）")
+    extra = [x for x in (timing_report(con, "B1W"), subgroup_report(con, "B1W")) if x]
+    out += extra
     return chr(10).join(out) if len(out) > 1 else ""
 
+
+
+PHASE_LABEL = [("T10", "10分前"), ("T5", "5分前"), ("B1R", "2〜3分前（判断）"), ("T1", "1分前"), ("POST", "最終")]
+
+
+def _snapshot(con, rid, ph):
+    """そのレースの、ある時点の全組番の倍率（最後に取得したもの）"""
+    od = {bt: {} for bt in kr.BET_TYPES}
+    for bt, cb, o, om in con.execute("""SELECT bet_type, combo, odds, odds_max FROM odds WHERE race_id=? AND phase=? AND source='winticket'
+            AND fetched_at=(SELECT MAX(fetched_at) FROM odds WHERE race_id=? AND phase=? AND source='winticket')""", (rid, ph, rid, ph)):
+        od[bt][cb] = (o, om, None)
+    return od
+
+
+def timing_report(con, ph="B1W", since=None):
+    """② 買い目の倍率が、締切10分前→5分前→2〜3分前→1分前→最終でどう動いたか。各時点の割安度1.0以上の割合も"""
+    import numpy as np
+    q = """SELECT p.race_id, p.combo FROM predictions p JOIN races r USING(race_id) WHERE p.phase=? AND p.stake>0
+           AND EXISTS (SELECT 1 FROM payouts y WHERE y.race_id=p.race_id)""" + (" AND r.date>=?" if since else "")
+    picks = con.execute(q, (ph, since) if since else (ph,)).fetchall()
+    if not picks:
+        return ""
+    by = {}
+    for rid, cb in picks:
+        by.setdefault(rid, []).append(cb)
+    drift = {k: [] for k, _ in PHASE_LABEL}
+    value = {k: [] for k, _ in PHASE_LABEL}
+    for rid, cbs in by.items():
+        snaps = {k: _snapshot(con, rid, k) for k, _ in PHASE_LABEL}
+        fin = snaps["POST"]["ワイド"]
+        for k, _ in PHASE_LABEL:
+            od = snaps[k]
+            if not od["3連単"]:
+                continue
+            ev = {e["combo"]: e["evc"] for e in kr.evaluate(od) if e["bet_type"] == "ワイド"}
+            for cb in cbs:
+                if cb in od["ワイド"] and cb in fin and fin[cb][0]:
+                    drift[k].append(od["ワイド"][cb][0] / fin[cb][0] - 1)
+                if cb in ev:
+                    value[k].append(ev[cb] >= 1.0)
+    out = [f"② 時点ごとの倍率（{LABEL.get(ph, ph)}の買い目 {len(picks)}点）　※最終と比べて何%高かったか／その時点で割安度1.0以上だった割合"]
+    for k, name in PHASE_LABEL:
+        if drift[k] or value[k]:
+            d = f"{np.median(drift[k]):+.0%}" if drift[k] and k != "POST" else "−"
+            v = f"{np.mean(value[k]):.0%}" if value[k] else "−"
+            out.append(f"　{name}: 最終より {d} ／ 割安 {v}（{len(value[k])}点）")
+    return chr(10).join(out)
+
+
+def subgroup_report(con, ph="B1W", since=None):
+    """③ 過去データで見つけた条件ごとの成績（新しい条件は探さない）"""
+    import datetime as _dt
+    q = """SELECT p.race_id, p.combo, p.ref_odds, p.bet_rating, r.start_at, r.line_json,
+              COALESCE((SELECT payout FROM payouts y WHERE y.race_id=p.race_id AND y.bet_type=p.bet_type AND y.combo=p.combo), 0)
+           FROM predictions p JOIN races r USING(race_id) WHERE p.phase=? AND p.stake>0
+           AND EXISTS (SELECT 1 FROM payouts y WHERE y.race_id=p.race_id)""" + (" AND r.date>=?" if since else "")
+    rows = con.execute(q, (ph, since) if since else (ph,)).fetchall()
+    if not rows:
+        return ""
+    groups = {"同じラインで3番手が絡む": [], "割安度0.95以上": [], "倍率6〜7倍台": [], "朝・夕方のレース": []}
+    rest = {k: [] for k in groups}
+    for rid, cb, o, tag, start, lj, pay in rows:
+        try:
+            lines = [[n for x in l["entries"] for n in x["numbers"]] for l in json.loads(lj or "[]")]
+        except Exception:
+            lines = []
+        a, b = map(int, cb.split("-"))
+        same3 = any(a in l and b in l and (l.index(a) == 2 or l.index(b) == 2) for l in lines)
+        try:
+            v = float(str(tag).replace("割安度", "").replace("見込み", ""))
+        except ValueError:
+            v = 0
+        h = _dt.datetime.fromtimestamp(start, kr.JST).hour
+        flags = {"同じラインで3番手が絡む": same3, "割安度0.95以上": v >= 0.95, "倍率6〜7倍台": (o or 0) < 8,
+                 "朝・夕方のレース": h <= 11 or 15 <= h <= 17}
+        for k, f in flags.items():
+            (groups if f else rest)[k].append(pay)
+    roi = lambda x: f"{sum(x) / (len(x) * 100):.0%}（{len(x)}点）" if x else "−"
+    out = [f"③ 過去データで見つけた条件の成績（{LABEL.get(ph, ph)}・確定分）　当てはまる ／ 当てはまらない"]
+    for k in groups:
+        out.append(f"　{k}: {roi(groups[k])} ／ {roi(rest[k])}")
+    return chr(10).join(out)

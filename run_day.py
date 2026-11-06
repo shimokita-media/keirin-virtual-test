@@ -23,6 +23,7 @@ def keep_awake(on=True):
     except Exception:
         pass
 
+SNAPSHOTS = {"T10": (9.0, 11.0), "T5": (4.5, 5.8), "T1": (0.4, 1.5)}  # 記録だけ（判断には使わない）
 DECIDE_WINDOW = (2.0, 3.5)  # 2026-11-07〜 締切2〜3分前に判断（それまでは4〜7分前）
 NOTIFY_RULE = False  # 2026-11-07〜 法則枠は通知せず記録のみ。Discord の買い目・結果はワイド枠だけ
 ONLY_RULE = True  # 2026-11-06〜 法則枠(B1R)のみ記録（B0/B1・検証買い・万車券枠は停止。結果回収は継続）
@@ -56,6 +57,12 @@ def tick(con, done_results):
     for r in pre + post:
         rid, mins = r["race_id"], (r["close_at"] - time.time()) / 60
         try:
+            # 倍率が「いつ」「どれだけ」動くかを調べるため、締切10分前・5分前・1分前の倍率も記録する（2026-11-07〜）
+            for ph, (lo, hi) in SNAPSHOTS.items():
+                if lo <= mins <= hi and not con.execute(
+                        "SELECT 1 FROM odds WHERE race_id=? AND phase=? AND source='winticket' LIMIT 1", (rid, ph)).fetchone():
+                    kr.fetch_race(con, r, ph)
+                    mins = (r["close_at"] - time.time()) / 60
             if not ONLY_RULE and 30 <= mins <= B0_TARGET and not has(con, rid, "B0"):
                 rd, odds, meta = kr.fetch_race(con, r, "B0")
                 nk, _ = kr.fetch_nk_odds(con, r, "B0")

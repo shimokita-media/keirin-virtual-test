@@ -104,6 +104,9 @@ def main(end=None):
         L.append(breakdown(b, 7, "日程別"))
         L.append(breakdown(b, 8, "並び別"))
         L.append(breakdown(b, 9, "時間帯別"))
+    for x in (notify.timing_report(con, "B1W", since=d0), notify.subgroup_report(con, "B1W", since=d0)):
+        if x:
+            L.append(x)
     L.append("※ 1週間分は点数が少なく、回収率は運で大きくぶれます。判断は「最終の倍率での割安度」と数週間の流れで。")
     txt = chr(10).join(L)
     os.makedirs(os.path.join(kr.BASE, "out"), exist_ok=True)
