@@ -12,11 +12,21 @@ import requests
 DESKTOP = os.path.join(os.path.expanduser("~"), "Desktop")
 
 
+QUIET_HOURS = (0, 7)  # 0時〜7時は Discord に送らない（2026-11-07〜）
+
+
+def is_quiet():
+    return QUIET_HOURS[0] <= kr.now().hour < QUIET_HOURS[1]
+
+
 def discord(text):
     """環境変数 KEIRIN_DISCORD_WEBHOOK（GitHub のシークレット）に設定された Discord に送る。未設定なら何もしない。
     失敗したら最大3回やり直し、それでも失敗したら内容をログに残す"""
     url = os.environ.get("KEIRIN_DISCORD_WEBHOOK")
     if not url:
+        return
+    if is_quiet():
+        print(kr.now().strftime("%H:%M:%S"), "quiet hours, not sent:", text.splitlines()[0] if text else "", flush=True)
         return
     import time as _t
     for i in range(0, len(text), 1900):  # Discord は1通2000文字まで

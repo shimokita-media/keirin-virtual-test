@@ -120,20 +120,44 @@ def tick(con, done_results):
 
 
 def heartbeat(con):
-    """1時間ごとの稼働連絡（その日の最終締切まで）。直近1時間の判断数と買い目数、次の判断予定を送る"""
+    """1時間ごとの稼働連絡。レースがある時間帯だけ（次の締切まで90分以内、または直前30分以内に締切があったとき）"""
     t = time.time()
     rs = rows(con)
-    if not rs or max(r["close_at"] for r in rs) < t:
+    if not rs or not any(t - 30 * 60 <= r["close_at"] <= t + 90 * 60 for r in rs):
         return
     since = kr.dt.datetime.fromtimestamp(t - 3600, kr.JST).isoformat(timespec="seconds")
     n_race, n_pick = con.execute("""SELECT COUNT(DISTINCT race_id), COALESCE(SUM(stake > 0), 0) FROM predictions
-                                    WHERE phase IN ('B1R','B1W') AND created_at >= ?""", (since,)).fetchone()
+                                    WHERE phase='B1W' AND created_at >= ?""", (since,)).fetchone()
     nxt = [r for r in rs if r["close_at"] > t + 4 * 60]
-    msg = f"【稼働中】{kr.now():%H:%M} 直近1時間で {n_race}レースを判断、買い目 {n_pick}点"
+    msg = f"【稼働中】{kr.now():%H:%M} 直近1時間で {n_race}レースを判断、ワイド枠の買い目 {n_pick}点"
     if nxt:
         r = nxt[0]
         msg += f"／次の判断 {r['venue']}{r['race_no']}R（締切 {kr.ts(r['close_at'])[11:16]}）"
     notify.discord(msg)
+
+
+def morning(con):
+    """朝7時以降の最初の1回だけ「おはようございます」を送る（その日の開催・最初の判断・毎日の一覧の置き場所）"""
+    if notify.is_quiet():
+        return
+    con.execute("CREATE TABLE IF NOT EXISTS notices(day TEXT, kind TEXT, PRIMARY KEY(day, kind))")
+    if con.execute("SELECT 1 FROM notices WHERE day=? AND kind='morning'", (DAY,)).fetchone():
+        return
+    rs = rows(con)
+    if not rs:
+        return
+    t = time.time()
+    nxt = [r for r in rs if r["close_at"] > t + 4 * 60]
+    venues = sorted({r["venue"] for r in rs})
+    msg = [f"【おはようございます】{DAY[4:6]}/{DAY[6:]} は {len(venues)}開催・{len(rs)}レース（{'・'.join(venues)}）"]
+    if nxt:
+        msg.append(f"最初の判断: {nxt[0]['venue']}{nxt[0]['race_no']}R（締切 {kr.ts(nxt[0]['close_at'])[11:16]}、その2〜3分前に通知）")
+    repo = os.environ.get("GITHUB_REPOSITORY")
+    if repo:
+        msg.append(f"毎日の一覧（前日までのレース・選手・全オッズ）: https://github.com/{repo}/releases/tag/tables")
+    notify.discord(chr(10).join(msg))
+    con.execute("INSERT OR IGNORE INTO notices VALUES(?, 'morning')", (DAY,))
+    con.commit()
 
 
 def export_if_done(con, day):
@@ -191,6 +215,7 @@ def main():
                 say("daily ERR", traceback.format_exc()[-300:])
             last_daily = time.time()
         tick(con, done)
+        morning(con)
         hb = kr.now().strftime("%Y%m%d%H")
         if hb != last_beat:
             last_beat = hb
