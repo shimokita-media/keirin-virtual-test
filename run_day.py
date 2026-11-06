@@ -109,6 +109,23 @@ def tick(con, done_results):
             say("ERR", rid, traceback.format_exc()[-400:])
 
 
+def heartbeat(con):
+    """1時間ごとの稼働連絡（その日の最終締切まで）。直近1時間の判断数と買い目数、次の判断予定を送る"""
+    t = time.time()
+    rs = rows(con)
+    if not rs or max(r["close_at"] for r in rs) < t:
+        return
+    since = kr.dt.datetime.fromtimestamp(t - 3600, kr.JST).isoformat(timespec="seconds")
+    n_race, n_pick = con.execute("""SELECT COUNT(DISTINCT race_id), COALESCE(SUM(stake > 0), 0) FROM predictions
+                                    WHERE phase IN ('B1R','B1W') AND created_at >= ?""", (since,)).fetchone()
+    nxt = [r for r in rs if r["close_at"] > t + 4 * 60]
+    msg = f"【稼働中】{kr.now():%H:%M} 直近1時間で {n_race}レースを判断、買い目 {n_pick}点"
+    if nxt:
+        r = nxt[0]
+        msg += f"／次の判断 {r['venue']}{r['race_no']}R（締切 {kr.ts(r['close_at'])[11:16]}）"
+    notify.discord(msg)
+
+
 def single_instance():
     """重複起動の防止（ローカルのポートを確保できなければ、既に動いているとみなして終了）"""
     import socket
@@ -130,6 +147,7 @@ def main():
     keep_awake(True)
     done = set()
     last_daily = 0
+    last_beat = kr.now().strftime("%Y%m%d%H")  # 起動した時間帯は送らない
     while True:
         if time.time() - last_daily > 600 and kr.now().strftime("%Y%m%d") == DAY:
             try:
@@ -138,6 +156,10 @@ def main():
                 say("daily ERR", traceback.format_exc()[-300:])
             last_daily = time.time()
         tick(con, done)
+        hb = kr.now().strftime("%Y%m%d%H")
+        if hb != last_beat:
+            last_beat = hb
+            heartbeat(con)
         rs = rows(con)
         if once or (rs and all(r["race_id"] in done or r["status"] == 9 for r in rs)):
             break
