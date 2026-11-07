@@ -33,6 +33,20 @@ def picks(od, lines):
     return out
 
 
+def picks3(od, lines):
+    """3〜20倍・割安度0.85以上で、同じラインの3番手を含むワイド（1レースの点数制限なし）"""
+    pos = {v: k for l in lines for k, v in enumerate(l)}
+    lid = {v: i for i, l in enumerate(lines) for v in l}
+    out = []
+    for e in kr.evaluate(od):
+        if e["bet_type"] != "ワイド" or not (3 <= e["odds"] <= 20) or e["evc"] < 0.85:
+            continue
+        a, b = map(int, e["combo"].split("-"))
+        if a in lid and lid.get(a) == lid.get(b) and 2 in (pos.get(a), pos.get(b)):
+            out.append((e["combo"], e["odds"], 0, True))
+    return out
+
+
 def load(con, rid, phase):
     fa = con.execute("SELECT MAX(fetched_at) FROM odds WHERE race_id=? AND phase=? AND source='winticket'", (rid, phase)).fetchone()[0]
     if not fa:
@@ -54,10 +68,11 @@ def build(con, d0):
         for kind, od in (("A", fin), ("B", load(con, rid, "B1R") or load(con, rid, "T5"))):
             if not od:
                 continue
-            for cb, o, sc, third in picks(od, lines):
-                fo = fin["ワイド"].get(cb, (None,))[0] if fin else None
-                rows.append(dict(kind=kind, race_id=rid, date=date, combo=cb, odds=o, fin=fo, 点=sc, 三番手=third,
-                                 ret=pay.get((rid, cb), 0) / 100))
+            for k2, fn in ((kind, picks), (kind + "3", picks3)):
+                for cb, o, sc, third in fn(od, lines):
+                    fo = fin["ワイド"].get(cb, (None,))[0] if fin else None
+                    rows.append(dict(kind=k2, race_id=rid, date=date, combo=cb, odds=o, fin=fo, 点=sc, 三番手=third,
+                                     ret=pay.get((rid, cb), 0) / 100))
     return pd.DataFrame(rows)
 
 
@@ -99,6 +114,24 @@ def main(d0="20261101"):
                                                           "3点以上": f"{(g.点 >= 3).sum()}点 {g[g.点 >= 3].ret.mean():.0%}" if (g.点 >= 3).any() else "−",
                                                           "3番手絡み": f"{g.三番手.sum()}点 {g[g.三番手].ret.mean():.0%}" if g.三番手.any() else "−"}))
         L += ["\n日ごと\n", g.to_markdown()]
+    # D. 本命候補：3〜20倍・同じラインの3番手（2〜11月の最終オッズで118%、全10か月105%以上）
+    L.append("\n## D. 本命候補：3〜20倍・割安度0.85以上・同じラインの3番手を含むワイド（点数制限なし）\n")
+    L.append("2〜11月の最終オッズでは118%（2〜4月116%・5〜11月118%）。締切前で選んだ場合が本当の確認。\n")
+    for kind, title in (("B3", "締切前のオッズで選んだ場合 ← 実際に近い"), ("A3", "最終オッズで選んだ場合（参考）")):
+        d = df[df.kind == kind] if len(df) else df
+        L.append(f"\n**{title}**\n")
+        if not len(d):
+            L.append("（まだデータなし）")
+            continue
+        L += ["| 範囲 | 点数 | 回収率 | 的中率 |", "|---|---|---|---|"]
+        for name, m in ((f"{d0}〜 全部", d.index == d.index), (f"{d0}〜 8〜10倍（参考の帯）", d.odds.between(8, 10)),
+                        (f"{CLEAN_FROM}〜 全部", d.date >= CLEAN_FROM), (f"{CLEAN_FROM}〜 8〜10倍", (d.date >= CLEAN_FROM) & d.odds.between(8, 10))):
+            L.append(f"| {name} " + line(d[m]))
+        if kind == "B3" and d.fin.notna().any():
+            x = d[d.fin.notna()]
+            L.append(f"\n選んだ後、最終までの倍率の変化（中央）：{(x.fin / x.odds - 1).median():+.0%}")
+        g = d.groupby("date").apply(lambda g: f"{len(g)}点 {g.ret.mean():.0%}")
+        L += ["\n日ごと：" + " ／ ".join(f"{k[4:6]}/{k[6:]} {v}" for k, v in g.items())]
     # C. 実際に通知したワイド枠を、通知に出した「新しい点数」ごとに（2026-11-08〜、判断時に記録した点数）
     live = pd.read_sql("""SELECT p.race_id, r.date, p.bet_rating,
         COALESCE((SELECT payout FROM payouts y WHERE y.race_id=p.race_id AND y.bet_type='ワイド' AND y.combo=p.combo), 0) / 100.0 AS ret
