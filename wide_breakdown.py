@@ -105,6 +105,8 @@ def table(df, col, order=None, min_n=150):
                      "95%の範囲": f"{np.percentile(bs, 2.5):.0%}〜{np.percentile(bs, 97.5):.0%}",
                      "100%超の月": f"{int((bym > 1).sum())}/{len(bym)}", "lo": np.percentile(bs, 2.5)})
     t = pd.DataFrame(rows)
+    if t.empty:
+        return pd.DataFrame({col: ["（点数が少ないため省略）"]})
     if order:
         t[col] = pd.Categorical(t[col], order, ordered=True)
         t = t.sort_values(col)
@@ -137,7 +139,8 @@ def main(d0="20260601", d1="20261105"):
         L.append(f"\n## {col}\n")
         L.append(table(df, col, order).to_markdown(index=False))
     txt = "\n".join(L)
-    open(os.path.join(OUT, "wide_breakdown.md"), "w", encoding="utf-8").write(txt)
+    name = "wide_breakdown.md" if (d0, d1) == ("20260601", "20261105") else f"wide_breakdown_{d0}_{d1}.md"
+    open(os.path.join(OUT, name), "w", encoding="utf-8").write(txt)
     print(txt)
 
 
