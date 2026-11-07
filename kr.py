@@ -83,6 +83,11 @@ def db():
     CREATE TABLE IF NOT EXISTS payouts(race_id TEXT, bet_type TEXT, combo TEXT, payout INT, popularity INT,
       fetched_at TEXT, PRIMARY KEY(race_id, bet_type, combo));
     """)
+    # 2026-11-07〜 S（スタート取り）・B（バック）の回数も記録する（出走表に載っている数字）
+    cols = {r[1] for r in con.execute("PRAGMA table_info(entries)")}
+    for c in ("n_standing", "n_back"):
+        if c not in cols:
+            con.execute(f"ALTER TABLE entries ADD COLUMN {c} INT")
     return con
 
 
@@ -157,13 +162,15 @@ def fetch_race(con, row, phase=""):
         p = players.get(e["playerId"], {})
         rc = recs.get(e["playerId"], {})
         recent = [x["order"] for c in rc.get("latestCupResults", []) for x in c.get("raceResults", [])]
-        con.execute("INSERT OR REPLACE INTO entries VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        con.execute("""INSERT OR REPLACE INTO entries(race_id,number,bracket,player_id,name,prefecture,term,age,class,grp,
+            style,gear,race_point,comment,prediction_mark,first_rate,second_rate,third_rate,n_front,n_stalker,n_closer,
+            n_marker,recent_orders,absent,fetched_at,n_standing,n_back) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                     (rid, e["number"], e["bracketNumber"], e["playerId"], p.get("name"), p.get("prefecture"),
                      p.get("term"), p.get("age"), p.get("class"), p.get("group"), rc.get("style"),
                      rc.get("gearRatio"), rc.get("racePoint"), rc.get("comment"), rc.get("predictionMark"),
                      rc.get("firstRate"), rc.get("secondRate"), rc.get("thirdRate"), rc.get("frontRunner"),
                      rc.get("stalker"), rc.get("deepCloser"), rc.get("marker"), json.dumps(recent),
-                     int(e["absent"]), t))
+                     int(e["absent"]), t, rc.get("standing"), rc.get("back")))
     lp = rd.get("linePrediction") or {}
     con.execute("UPDATE races SET line_type=?, line_json=?, status=?, updated_at=? WHERE race_id=?",
                 (lp.get("lineType"), json.dumps(lp.get("lines", []), ensure_ascii=False),
