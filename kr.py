@@ -88,7 +88,24 @@ def db():
     for c in ("n_standing", "n_back"):
         if c not in cols:
             con.execute(f"ALTER TABLE entries ADD COLUMN {c} INT")
+    # 上がりタイム（今の開催＋前の開催の各レース。0.0=記録なしは除く）の平均・最速・本数
+    for c, t in (("agari_avg", "REAL"), ("agari_best", "REAL"), ("agari_n", "INT")):
+        if c not in cols:
+            con.execute(f"ALTER TABLE entries ADD COLUMN {c} {t}")
     return con
+
+
+def agari(rc):
+    """出走表の記録から上がりタイムをまとめる。(平均, 最速, 本数)。本数0なら (None, None, 0)"""
+    ts_ = []
+    for x in (rc.get("currentCupResults") or []) + (rc.get("previousCupResults") or []):
+        try:
+            v = float(x.get("finalHalfRecord") or 0)
+        except ValueError:
+            continue
+        if v > 0:
+            ts_.append(v)
+    return (round(sum(ts_) / len(ts_), 2), min(ts_), len(ts_)) if ts_ else (None, None, 0)
 
 
 def log(con, source, url, race_id, ok, n=0, note=""):
@@ -164,13 +181,14 @@ def fetch_race(con, row, phase=""):
         recent = [x["order"] for c in rc.get("latestCupResults", []) for x in c.get("raceResults", [])]
         con.execute("""INSERT OR REPLACE INTO entries(race_id,number,bracket,player_id,name,prefecture,term,age,class,grp,
             style,gear,race_point,comment,prediction_mark,first_rate,second_rate,third_rate,n_front,n_stalker,n_closer,
-            n_marker,recent_orders,absent,fetched_at,n_standing,n_back) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            n_marker,recent_orders,absent,fetched_at,n_standing,n_back,agari_avg,agari_best,agari_n)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                     (rid, e["number"], e["bracketNumber"], e["playerId"], p.get("name"), p.get("prefecture"),
                      p.get("term"), p.get("age"), p.get("class"), p.get("group"), rc.get("style"),
                      rc.get("gearRatio"), rc.get("racePoint"), rc.get("comment"), rc.get("predictionMark"),
                      rc.get("firstRate"), rc.get("secondRate"), rc.get("thirdRate"), rc.get("frontRunner"),
                      rc.get("stalker"), rc.get("deepCloser"), rc.get("marker"), json.dumps(recent),
-                     int(e["absent"]), t, rc.get("standing"), rc.get("back")))
+                     int(e["absent"]), t, rc.get("standing"), rc.get("back"), *agari(rc)))
     lp = rd.get("linePrediction") or {}
     con.execute("UPDATE races SET line_type=?, line_json=?, status=?, updated_at=? WHERE race_id=?",
                 (lp.get("lineType"), json.dumps(lp.get("lines", []), ensure_ascii=False),

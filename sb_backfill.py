@@ -11,7 +11,7 @@ def main(d0, d1):
     con = kr.db()
     con.row_factory = sqlite3.Row
     rs = con.execute("""SELECT * FROM races r WHERE date BETWEEN ? AND ?
-                        AND EXISTS (SELECT 1 FROM entries e WHERE e.race_id=r.race_id AND e.n_back IS NULL)
+                        AND EXISTS (SELECT 1 FROM entries e WHERE e.race_id=r.race_id AND e.agari_n IS NULL)
                         ORDER BY date, close_at""", (d0, d1)).fetchall()
     print(len(rs), "races", flush=True)
     for i, r in enumerate(rs, 1):
@@ -19,8 +19,9 @@ def main(d0, d1):
             q, _ = kr.wt_state(kr.race_url(r))
             recs = {x["playerId"]: x for x in q["FETCH_KEIRIN_RACE"]["records"]}
             for pid, x in recs.items():
-                con.execute("UPDATE entries SET n_standing=?, n_back=? WHERE race_id=? AND player_id=?",
-                            (x.get("standing"), x.get("back"), r["race_id"], pid))
+                con.execute("""UPDATE entries SET n_standing=?, n_back=?, agari_avg=?, agari_best=?, agari_n=?
+                               WHERE race_id=? AND player_id=?""",
+                            (x.get("standing"), x.get("back"), *kr.agari(x), r["race_id"], pid))
             con.commit()
         except Exception as e:
             print("ERR", r["race_id"], repr(e)[:150], flush=True)
