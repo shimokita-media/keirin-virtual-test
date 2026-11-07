@@ -79,6 +79,7 @@ jobs:
         if: always() && (github.event_name == 'schedule' || inputs.mode == 'run')
         run: |
           python export.py || true
+          python score_track.py || true   # 点数方式・3番手絡みの追跡（記録には触らない）
           gzip -kf keirin.sqlite
           gh release upload db keirin.sqlite.gz --clobber
           # その日の一覧（レース・選手・全オッズ）ができていれば、リリース "tables" に置いて Discord に知らせる
