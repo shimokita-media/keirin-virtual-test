@@ -36,6 +36,12 @@ def daily(con, day):
 
 
 def main(a, b):
+    # 取り込みの間だけ Windows のアイドルスリープを止める（終われば元に戻る。GitHub Actions では何もしない）
+    try:
+        import ctypes
+        ctypes.windll.kernel32.SetThreadExecutionState(0x80000000 | 0x00000001)
+    except Exception:
+        pass
     con = kr.db()
     con.row_factory = sqlite3.Row
     d = dt.datetime.strptime(a, "%Y%m%d")
