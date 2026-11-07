@@ -87,6 +87,9 @@ def tick(con, done_results):
                             notify.discord(notify.picks_message(r, kr.ts(r["close_at"])[11:16], m, show_rule, wide))
                             notify.toast(f"競輪 {r['venue']}{r['race_no']}R 締切{kr.ts(r['close_at'])[11:16]}（あと{m:.0f}分）",
                                          " / ".join(f"{p['bet_type']}{p['combo']} {p['odds']}倍" for p in show_rule + wide))
+                        else:
+                            # 0点のときも一言だけ送る（動いていないのか、買い目がないのかを見分けるため。2026-11-07〜）
+                            notify.discord(f"⏭️ {r['venue']} {r['race_no']}R（締切 {kr.ts(r['close_at'])[11:16]}）：見送り（条件に合うワイドなし）")
                         notify.write_today(con, DAY)
             elif not ONLY_RULE and B1_WINDOW[0] <= mins <= B1_WINDOW[1] and not has(con, rid, "B1"):
                 rd, odds, meta = kr.fetch_race(con, r, "B1")
