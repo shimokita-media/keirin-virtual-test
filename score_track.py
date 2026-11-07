@@ -99,6 +99,20 @@ def main(d0="20261101"):
                                                           "3点以上": f"{(g.点 >= 3).sum()}点 {g[g.点 >= 3].ret.mean():.0%}" if (g.点 >= 3).any() else "−",
                                                           "3番手絡み": f"{g.三番手.sum()}点 {g[g.三番手].ret.mean():.0%}" if g.三番手.any() else "−"}))
         L += ["\n日ごと\n", g.to_markdown()]
+    # C. 実際に通知したワイド枠を、通知に出した「新しい点数」ごとに（2026-11-08〜、判断時に記録した点数）
+    live = pd.read_sql("""SELECT p.race_id, r.date, p.bet_rating,
+        COALESCE((SELECT payout FROM payouts y WHERE y.race_id=p.race_id AND y.bet_type='ワイド' AND y.combo=p.combo), 0) / 100.0 AS ret
+        FROM predictions p JOIN races r USING(race_id) WHERE p.phase='B1W' AND p.stake>0 AND p.bet_rating LIKE '%点%'
+        AND EXISTS (SELECT 1 FROM payouts y WHERE y.race_id=p.race_id)""", con)
+    L.append("\n## C. 実際に通知したワイド枠 × 新しい点数（判断時に記録した点数・ガールズ込み）\n")
+    if len(live):
+        live["点"] = live.bet_rating.str.extract(r"点(\d)").astype(int)
+        L += ["| 買う条件 | 点数 | 回収率 | 的中率 |", "|---|---|---|---|"]
+        for name, m in (("全部", live.点 >= 0), ("2点以上", live.点 >= 2), ("3点以上", live.点 >= 3), ("4点以上", live.点 >= 4)):
+            L.append(f"| {name} " + line(live[m]))
+        L.append("\n点ごと：" + " ／ ".join(f"{k}点 {len(g)}点 {g.ret.mean():.0%}" for k, g in live.groupby("点")))
+    else:
+        L.append("（まだデータなし）")
     txt = "\n".join(L)
     os.makedirs(os.path.join(kr.BASE, "out"), exist_ok=True)
     open(os.path.join(kr.BASE, "out", "score_track.md"), "w", encoding="utf-8").write(txt)

@@ -491,8 +491,16 @@ def record_wide(con, row, odds, meta):
     picks = [r for r in evaluate(odds) if r["bet_type"] == "ワイド" and 6 <= r["odds"] <= 10 and r["evc"] >= 0.85]
     picks.sort(key=lambda r: -r["evc"])
     picks = picks[:5]
+    # 新しい点数（2026-11-08〜、表示と記録だけ。選び方は変えない）。判断と同じ時点で計算して記録に残す
+    for r in picks:
+        try:
+            import newscore
+            r["score"], r["why"], r["wind"] = newscore.score(con, row, r["combo"], len(picks))
+        except Exception:
+            r["score"], r["why"], r["wind"] = None, [], None
     created = now().isoformat(timespec="seconds")
-    recs = [(r["combo"], 100, r["odds"], r["p"], r["ev1"], r["ev2"], f"割安度{r['evc']:.2f}") for r in picks] \
+    recs = [(r["combo"], 100, r["odds"], r["p"], r["ev1"], r["ev2"],
+             f"割安度{r['evc']:.2f}" + (f" 点{r['score']}" if r.get("score") is not None else "")) for r in picks] \
         or [("", 0, None, None, None, None, "C")]
     for c, s, o, p, e1, e2, tag in recs:
         bt = "ワイド" if s else "見送り"

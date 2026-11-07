@@ -63,7 +63,15 @@ def picks_message(r, close_hm, mins, rule, wide):
     L = [f"🚴 **{r['venue']} {r['race_no']}R**　⏰ 締切 {close_hm}（あと{mins:.0f}分）"]
     if wide:
         L.append("🎯 **ワイド枠**")
-        L += [f"　・**{p['combo']}**　{p['odds']}倍" for p in wide]
+        for p in wide:
+            s = p.get("score")
+            if s is None:
+                L.append(f"　・**{p['combo']}**　{p['odds']}倍")
+            else:
+                mark = "🔥" if s >= 3 else "⭐"
+                L.append(f"　・**{p['combo']}**　{p['odds']}倍　{mark}**{s}点**（{'・'.join(p.get('why') or []) or 'なし'}）")
+        if any((p.get("score") or 0) >= 3 for p in wide):
+            L.append("🔥＝新しい点数で3点以上（過去の最終オッズでは142%。締切前での確認はこれから）")
     if rule:
         L.append("📐 **法則枠**")
         L += [f"　・{p['bet_type']} **{p['combo']}**　{p['odds']}倍" for p in rule]
@@ -319,7 +327,7 @@ def subgroup_report(con, ph="B1W", since=None):
         a, b = map(int, cb.split("-"))
         same3 = any(a in l and b in l and (l.index(a) == 2 or l.index(b) == 2) for l in lines)
         try:
-            v = float(str(tag).replace("割安度", "").replace("見込み", ""))
+            v = float(str(tag).replace("割安度", "").replace("見込み", "").split()[0])  # 「割安度0.92 点3」にも対応
         except ValueError:
             v = 0
         h = _dt.datetime.fromtimestamp(start, kr.JST).hour
