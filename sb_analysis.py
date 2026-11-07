@@ -21,7 +21,7 @@ def build(d0, d1, girls=False):
         if not girls and r["class"] == "L級":
             continue
         ent = {x["number"]: x for x in con.execute("SELECT * FROM entries WHERE race_id=? AND absent=0", (r["race_id"],))}
-        if not ent or any(x["n_back"] is None for x in ent.values()):
+        if not ent or any(x["agari_n"] is None for x in ent.values()):
             continue
         od = {bt: {} for bt in kr.BET_TYPES}
         for bt, cb, o, om, p in con.execute("""SELECT bet_type, combo, odds, odds_max, popularity FROM odds WHERE race_id=? AND phase='POST'
@@ -39,6 +39,8 @@ def build(d0, d1, girls=False):
         pos = {n: k for l in lines for k, n in enumerate(l)}
         B = {n: x["n_back"] or 0 for n, x in ent.items()}
         S = {n: x["n_standing"] or 0 for n, x in ent.items()}
+        AG = {n: x["agari_avg"] for n, x in ent.items() if x["agari_avg"]}
+        ag_rank = {n: i + 1 for i, n in enumerate(sorted(AG, key=AG.get))}  # 上がりの平均が速い順
         leaders = [l[0] for l in lines if len(l) >= 2 and l[0] in B]
         lead_b = sorted((B[n] for n in leaders), reverse=True)
         top_b_no = max(B, key=B.get)
@@ -56,7 +58,10 @@ def build(d0, d1, girls=False):
                          "レース最多Bの選手を含む": top_b_no in (a, b),
                          "レース最多Bのラインに乗る": any(lid.get(n) is not None and lid.get(n) == lid.get(top_b_no) for n in (a, b)),
                          "先行型の先頭の数": n_senko, "B1位と2位の差": (lead_b[0] - lead_b[1]) if len(lead_b) >= 2 else 99,
-                         "2人のS合計": S.get(a, 0) + S.get(b, 0)})
+                         "2人のS合計": S.get(a, 0) + S.get(b, 0),
+                         "上がり順位の良い方": min(ag_rank.get(a, 9), ag_rank.get(b, 9)),
+                         "上がり順位の悪い方": max(ag_rank.get(a, 9), ag_rank.get(b, 9)),
+                         "上がり平均の差（レース最速との差）": (min(AG.get(a, 99), AG.get(b, 99)) - min(AG.values())) if AG else None})
     return pd.DataFrame(rows)
 
 
@@ -85,6 +90,11 @@ if __name__ == "__main__":
     show(df, "先行型の先頭の数")
     show(df, "B1位と2位の差", [-1, 1, 4, 98, 99], ["0〜1（互角）", "2〜4", "5以上（1人が抜けている）", "先頭が1人"])
     show(df, "2人のS合計", [0, 0.5, 3, 99], ["0", "1〜3", "4以上"])
+    for c in ("2人のB合計", "2人のB最大", "ライン先頭のB", "2人のS合計"):  # 点数が同じくらいになるように3つに分けた版
+        show(df, c, list(np.unique(np.quantile(df[c], [0, 1 / 3, 2 / 3, 1]))))
+    show(df, "上がり順位の良い方", [0, 1, 2, 3, 9], ["1位を含む", "2位", "3位", "4位以下"])
+    show(df, "上がり順位の悪い方", [0, 3, 5, 9], ["3位以内", "4〜5位", "6位以下"])
+    show(df, "上がり平均の差（レース最速との差）", [-1, 0.001, 0.2, 0.5, 99], ["最速を含む", "0.2秒以内", "0.2〜0.5秒", "0.5秒以上"])
     t = df[df["3番手絡み"]]
     print("\n# 同じラインで3番手が絡むワイドだけ")
     show(t, "ライン先頭のB", [0, 0.5, 3, 7, 99], ["0", "1〜3", "4〜7", "8以上"])
