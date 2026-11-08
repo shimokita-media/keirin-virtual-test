@@ -9,6 +9,7 @@ import pandas as pd
 import lightgbm as lgb
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
 BASE = os.path.dirname(HERE)
 WORK = os.path.join(BASE, "out", "eval_work")
 START = "20261109"
@@ -54,6 +55,12 @@ def prep(W):
 
 def main():
     db = download()
+    # 最優先：締切前に固定した買い目 × 確定の払戻 で各枠の成績（reports/preclose_live.md、2026-11-08〜）
+    try:
+        import preclose_eval
+        preclose_eval.main(db)
+    except Exception as e:
+        print("preclose_eval ERR", repr(e))
     import sqlite3
     end = sqlite3.connect(db).execute("SELECT MAX(date) FROM races WHERE race_id IN (SELECT race_id FROM results)").fetchone()[0]
     if not end or end < START:

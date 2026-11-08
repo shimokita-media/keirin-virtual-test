@@ -51,6 +51,18 @@ LABEL = {"B1R": "法則枠", "B1W": "ワイド枠", "B3T": "3連単枠", "B3A": 
 ICON = {"B1R": "📐", "B1W": "🎯", "B3T": "🎰", "B3A": "👀", "B3K": "👀"}
 
 
+def pay_of(con, rid, bt, cb):
+    """確定の払戻（円・100円あたり）。当たりならその額、判断後に買い目の選手が欠場していたら返還で100、外れは None（2026-11-08 追加）"""
+    p = con.execute("SELECT payout FROM payouts WHERE race_id=? AND bet_type=? AND combo=?", (rid, bt, cb)).fetchone()
+    if p:
+        return p[0]
+    nums = [int(x) for x in str(cb).split("-") if x.isdigit()]
+    if nums and con.execute("SELECT 1 FROM payouts WHERE race_id=? LIMIT 1", (rid,)).fetchone() and con.execute(
+            f"SELECT 1 FROM entries WHERE race_id=? AND absent=1 AND number IN ({','.join('?' * len(nums))}) LIMIT 1", (rid, *nums)).fetchone():
+        return 100
+    return None
+
+
 def yen(n):
     return f"{n:,}円"
 
@@ -95,9 +107,11 @@ def result_message(con, rid, phases=None):
         if not phases or len(phases) > 1:
             out.append(f"{ICON[ph]} {label}")
         for bt, cb in buys:
-            p = con.execute("SELECT payout FROM payouts WHERE race_id=? AND bet_type=? AND combo=?", (rid, bt, cb)).fetchone()
+            pv = pay_of(con, rid, bt, cb)
+            p = (pv,) if pv is not None else None
             total_ret += p[0] if p else 0
-            out.append(f"✅ {bt} **{cb}** → **{yen(p[0])}**" if p else f"❌ {bt} {cb}")
+            hit = con.execute("SELECT 1 FROM payouts WHERE race_id=? AND bet_type=? AND combo=?", (rid, bt, cb)).fetchone()
+            out.append(f"✅ {bt} **{cb}** → **{yen(p[0])}**" if hit else (f"↩️ {bt} {cb} → 欠場で返還 {yen(p[0])}" if p else f"❌ {bt} {cb}"))
         total_inv += len(buys) * 100
     if len(out) == 1:
         return None
@@ -113,14 +127,14 @@ def day_summary(con, day):
     L = [f"🌙 **本日のまとめ**　{day[4:6]}/{day[6:]}（{w}）"]
     for ph, label in LABEL.items():
         rows = con.execute("""SELECT p.race_id, p.bet_type, p.combo, p.stake, r.venue, r.race_no,
-                   COALESCE((SELECT payout FROM payouts y WHERE y.race_id=p.race_id AND y.bet_type=p.bet_type AND y.combo=p.combo), 0)
+                   COALESCE((SELECT payout FROM payouts y WHERE y.race_id=p.race_id AND y.bet_type=p.bet_type AND y.combo=p.combo), (SELECT 100 FROM entries e WHERE e.race_id=p.race_id AND e.absent=1 AND ('-'||p.combo||'-') LIKE ('%-'||e.number||'-%') AND EXISTS(SELECT 1 FROM payouts z WHERE z.race_id=p.race_id) LIMIT 1), 0)
                    FROM predictions p JOIN races r USING(race_id) WHERE p.phase=? AND p.stake>0 AND r.date=?""", (ph, day)).fetchall()
         if not rows:
             L.append(f"{ICON[ph]} {label}：買い目なし")
             continue
         inv = sum(x[3] for x in rows)
         ret = sum(x[6] * x[3] // 100 for x in rows)
-        hits = [x for x in rows if x[6]]
+        hits = [x for x in rows if x[6] and con.execute("SELECT 1 FROM payouts WHERE race_id=? AND bet_type=? AND combo=?", (x[0], x[1], x[2])).fetchone()]  # 返還は的中に数えない
         L.append(f"{ICON[ph]} **{label}**{'（記録のみ）' if ph in ('B1R', 'B3A', 'B3K') else ''}")
         L.append(f"　{len({x[0] for x in rows})}レース・{len(rows)}点・的中{len(hits)}　{yen(inv)} → {yen(ret)}（**{signed(ret - inv)}**）"
                  f"　回収率 **{ret / inv:.0%}**")
@@ -179,8 +193,8 @@ def write_today(con, day):
         L.append(head)
         for x in buys:
             tot[x["phase"]][0] += x["stake"]
-            p = con.execute("SELECT payout FROM payouts WHERE race_id=? AND bet_type=? AND combo=?",
-                            (rid, x["bet_type"], x["combo"])).fetchone()
+            pv = pay_of(con, rid, x["bet_type"], x["combo"])
+            p = (pv,) if pv is not None else None
             mark = ""
             if res:
                 mark = f"  → 的中 {p[0]:,}円" if p else "  → 外れ"
@@ -208,7 +222,7 @@ def metrics(con):
     out = ["📈 **累計の指標**（これまでの全記録・確定分）"]
     for ph, label in LABEL.items():
         rows = con.execute("""SELECT p.race_id, p.bet_type, p.combo, p.stake, p.ref_odds, r.close_at,
-                   (SELECT payout FROM payouts y WHERE y.race_id=p.race_id AND y.bet_type=p.bet_type AND y.combo=p.combo),
+                   COALESCE((SELECT payout FROM payouts y WHERE y.race_id=p.race_id AND y.bet_type=p.bet_type AND y.combo=p.combo), (SELECT 100 FROM entries e WHERE e.race_id=p.race_id AND e.absent=1 AND ('-'||p.combo||'-') LIKE ('%-'||e.number||'-%') AND EXISTS(SELECT 1 FROM payouts z WHERE z.race_id=p.race_id) LIMIT 1)),
                    (SELECT odds FROM odds o WHERE o.race_id=p.race_id AND o.bet_type=p.bet_type AND o.combo=p.combo
                       AND o.phase='POST' AND o.source='winticket' ORDER BY o.fetched_at DESC LIMIT 1),
                    (SELECT 1 FROM payouts y WHERE y.race_id=p.race_id LIMIT 1)
@@ -311,7 +325,7 @@ def subgroup_report(con, ph="B1W", since=None):
     """③ 過去データで見つけた条件ごとの成績（新しい条件は探さない）"""
     import datetime as _dt
     q = """SELECT p.race_id, p.combo, p.ref_odds, p.bet_rating, r.start_at, r.line_json,
-              COALESCE((SELECT payout FROM payouts y WHERE y.race_id=p.race_id AND y.bet_type=p.bet_type AND y.combo=p.combo), 0)
+              COALESCE((SELECT payout FROM payouts y WHERE y.race_id=p.race_id AND y.bet_type=p.bet_type AND y.combo=p.combo), (SELECT 100 FROM entries e WHERE e.race_id=p.race_id AND e.absent=1 AND ('-'||p.combo||'-') LIKE ('%-'||e.number||'-%') AND EXISTS(SELECT 1 FROM payouts z WHERE z.race_id=p.race_id) LIMIT 1), 0)
            FROM predictions p JOIN races r USING(race_id) WHERE p.phase=? AND p.stake>0
            AND EXISTS (SELECT 1 FROM payouts y WHERE y.race_id=p.race_id)""" + (" AND r.date>=?" if since else "")
     rows = con.execute(q, (ph, since) if since else (ph,)).fetchall()
