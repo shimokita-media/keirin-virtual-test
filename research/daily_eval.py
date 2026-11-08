@@ -85,6 +85,8 @@ def main():
     os.makedirs(os.path.join(BASE, "reports"), exist_ok=True)
     open(os.path.join(BASE, "reports", "drift_live.md"), "w", encoding="utf-8").write(txt)
     print(txt)
+    # 3連単の事前登録10個も続けて答え合わせ（reports/tri_live.md）
+    subprocess.run([sys.executable, os.path.join(HERE, "tri_live.py")], check=False)
 
 
 if __name__ == "__main__":
