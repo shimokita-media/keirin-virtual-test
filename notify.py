@@ -47,7 +47,8 @@ def discord(text):
             print(kr.now().strftime("%H:%M:%S"), "discord FAILED:", part.splitlines()[0], flush=True)
 
 
-LABEL = {"B1R": "法則枠", "B1W": "ワイド枠"}
+LABEL = {"B1R": "法則枠", "B1W": "ワイド枠", "B3T": "3連単枠"}
+ICON = {"B1R": "📐", "B1W": "🎯", "B3T": "🎰"}
 
 
 def yen(n):
@@ -58,13 +59,17 @@ def signed(n):
     return f"＋{n:,}円" if n > 0 else (f"−{-n:,}円" if n < 0 else "±0円")
 
 
-def picks_message(r, close_hm, mins, rule, wide):
+def picks_message(r, close_hm, mins, rule, wide, tri=()):
     """買い目の通知（見やすい形・絵文字つき）"""
     L = [f"🚴 **{r['venue']} {r['race_no']}R**　⏰ 締切 {close_hm}（あと{mins:.0f}分）"]
     if wide:
         L.append("🎯 **ワイド枠**")
         # 2026-11-09〜 新しい点数（🔥/⭐）の表示はやめた（未使用データ2回で効果なし）。点数は記録（bet_rating）にだけ残す
         for p in wide:
+            L.append(f"　・**{p['combo']}**　{p['odds']}倍")
+    if tri:
+        L.append("🎰 **3連単枠**")
+        for p in tri:
             L.append(f"　・**{p['combo']}**　{p['odds']}倍")
     if rule:
         L.append("📐 **法則枠**")
@@ -88,7 +93,7 @@ def result_message(con, rid, phases=None):
         if not buys:
             continue
         if not phases or len(phases) > 1:
-            out.append(f"{'🎯' if ph == 'B1W' else '📐'} {label}")
+            out.append(f"{ICON[ph]} {label}")
         for bt, cb in buys:
             p = con.execute("SELECT payout FROM payouts WHERE race_id=? AND bet_type=? AND combo=?", (rid, bt, cb)).fetchone()
             total_ret += p[0] if p else 0
@@ -111,12 +116,12 @@ def day_summary(con, day):
                    COALESCE((SELECT payout FROM payouts y WHERE y.race_id=p.race_id AND y.bet_type=p.bet_type AND y.combo=p.combo), 0)
                    FROM predictions p JOIN races r USING(race_id) WHERE p.phase=? AND p.stake>0 AND r.date=?""", (ph, day)).fetchall()
         if not rows:
-            L.append(f"{'🎯' if ph == 'B1W' else '📐'} {label}：買い目なし")
+            L.append(f"{ICON[ph]} {label}：買い目なし")
             continue
         inv = sum(x[3] for x in rows)
         ret = sum(x[6] * x[3] // 100 for x in rows)
         hits = [x for x in rows if x[6]]
-        L.append(f"{'🎯' if ph == 'B1W' else '📐'} **{label}**{'（記録のみ）' if ph == 'B1R' else ''}")
+        L.append(f"{ICON[ph]} **{label}**{'（記録のみ）' if ph == 'B1R' else ''}")
         L.append(f"　{len({x[0] for x in rows})}レース・{len(rows)}点・的中{len(hits)}　{yen(inv)} → {yen(ret)}（**{signed(ret - inv)}**）"
                  f"　回収率 **{ret / inv:.0%}**")
         if hits:
@@ -151,12 +156,13 @@ def write_today(con, day):
     """その日の法則枠・ワイド枠の買い目と結果を、デスクトップの「競輪 今日の買い目.txt」に書き出す"""
     con.row_factory = sqlite3.Row
     rows = con.execute("""SELECT p.*, r.venue, r.race_no, r.grade FROM predictions p JOIN races r USING(race_id)
-                          WHERE p.phase IN ('B1R','B1W') AND r.date=? ORDER BY r.close_at, p.phase, p.pred_id""", (day,)).fetchall()
+                          WHERE p.phase IN ('B1R','B1W','B3T') AND r.date=? ORDER BY r.close_at, p.phase, p.pred_id""", (day,)).fetchall()
     L = [f"競輪 今日の買い目 {day[:4]}/{day[4:6]}/{day[6:]}  更新 {kr.now():%H:%M}",
          "※ 仮想記録と同じ内容です。実際に買うかどうか・金額はご自身の判断で、遊べる範囲で。",
          "※ 法則枠: 7車立て・本命の1着見込み30〜60%・二分戦か三分戦のレースで、3連単から見て割安なワイド",
          "※ ワイド枠: 全レースで、倍率6〜10倍・3連単から見た割安度0.85以上のワイド",
-         "※ どちらも各100円、締切2〜3分前の倍率で判断（11/6までは4〜7分前）。Discordへの通知はワイド枠のみ", ""]
+         "※ 3連単枠（11/9〜）: 9車・2日目以降・同じラインで決まる目など、3期間すべて100%超えの形の法則5つ（最大6点）",
+         "※ どれも各100円、締切2〜3分前の倍率で判断（11/6までは4〜7分前）。Discordへの通知はワイド枠と3連単枠", ""]
     tot = {ph: [0, 0] for ph in LABEL}
     by = {}
     for r in rows:
@@ -229,7 +235,7 @@ def metrics(con):
         rng = np.random.default_rng(0)
         idx = rng.integers(0, len(order), (2000, len(order)))
         bs = ret[idx].sum(1) / inv[idx].sum(1)
-        out.append(f"{'🎯' if ph == 'B1W' else '📐'} **{label}**（{len(order)}レース・{len(rows)}点）")
+        out.append(f"{ICON[ph]} **{label}**（{len(order)}レース・{len(rows)}点）")
         if clv:
             out.append(f"　📉 買った時→最終の倍率：{np.median(clv):+.0%}（マイナスは払戻が減ったという意味）")
         # 最終の倍率で計算し直した割安度（払戻は最終の倍率で決まるので、これが1.0以上なら本当に割安だった）
@@ -243,7 +249,7 @@ def metrics(con):
                 continue
             ev = {(e["bet_type"], e["combo"]): e["evc"] for e in kr.evaluate(od)}
             fin_evc += [ev[(x[1], x[2])] for x in rows if x[0] == rid and (x[1], x[2]) in ev]
-        if fin_evc:
+        if fin_evc and ph != "B3T":  # 3連単枠は形で選ぶので、この割安度は当てはまらない
             fe = np.array(fin_evc)
             out.append(f"　💎 最終でも割安だった割合：**{np.mean(fe >= 1):.0%}**（割安度の中央値 {np.median(fe):.2f}。ここが増えるほど本物）")
         out.append(f"　💰 累計 **{signed(int(net[-1]))}**　／ 最大のへこみ {signed(-dd)}　／ 最大の連敗 {streak}レース")

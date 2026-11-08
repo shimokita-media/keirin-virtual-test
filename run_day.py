@@ -79,17 +79,21 @@ def tick(con, done_results):
                     r = con.execute("SELECT * FROM races WHERE race_id=?", (rid,)).fetchone()
                     out = kr.record_rule(con, r, odds, meta)
                     wide = kr.record_wide(con, r, odds, meta) or []
+                    try:  # 3連単枠（2026-11-09〜）。失敗してもワイド枠の通知は止めない
+                        tri = kr.record_trifecta(con, r, odds, meta) or []
+                    except Exception:
+                        say("ERR B3T", rid, traceback.format_exc()[-300:]); tri = []
                     if out:
                         picks, cond, m = out
-                        say("B1R", r["venue"], r["race_no"], "R", len(picks), "点", cond, "/ B1W", len(wide), "点")
+                        say("B1R", r["venue"], r["race_no"], "R", len(picks), "点", cond, "/ B1W", len(wide), "点", "/ B3T", len(tri), "点")
                         show_rule = picks if NOTIFY_RULE else []
-                        if show_rule or wide:
-                            notify.discord(notify.picks_message(r, kr.ts(r["close_at"])[11:16], m, show_rule, wide))
+                        if show_rule or wide or tri:
+                            notify.discord(notify.picks_message(r, kr.ts(r["close_at"])[11:16], m, show_rule, wide, tri))
                             notify.toast(f"競輪 {r['venue']}{r['race_no']}R 締切{kr.ts(r['close_at'])[11:16]}（あと{m:.0f}分）",
-                                         " / ".join(f"{p['bet_type']}{p['combo']} {p['odds']}倍" for p in show_rule + wide))
+                                         " / ".join(f"{p['bet_type']}{p['combo']} {p['odds']}倍" for p in show_rule + wide + tri))
                         else:
                             # 0点のときも一言だけ送る（動いていないのか、買い目がないのかを見分けるため。2026-11-07〜）
-                            notify.discord(f"⏭️ {r['venue']} {r['race_no']}R（締切 {kr.ts(r['close_at'])[11:16]}）：見送り（条件に合うワイドなし）")
+                            notify.discord(f"⏭️ {r['venue']} {r['race_no']}R（締切 {kr.ts(r['close_at'])[11:16]}）：見送り（条件に合うワイド・3連単なし）")
                         notify.write_today(con, DAY)
             elif not ONLY_RULE and B1_WINDOW[0] <= mins <= B1_WINDOW[1] and not has(con, rid, "B1"):
                 rd, odds, meta = kr.fetch_race(con, r, "B1")
@@ -105,9 +109,9 @@ def tick(con, done_results):
                 kr.fetch_race(con, r, "POST")
                 if con.execute("SELECT 1 FROM payouts WHERE race_id=?", (rid,)).fetchone():
                     done_results.add(rid); say("result", r["venue"], r["race_no"], "R")
-                    if has(con, rid, "B1R"):
+                    if has(con, rid, "B1R") or has(con, rid, "B3T"):
                         notify.write_today(con, DAY)
-                        msg = notify.result_message(con, rid, phases=None if NOTIFY_RULE else ("B1W",))
+                        msg = notify.result_message(con, rid, phases=None if NOTIFY_RULE else ("B1W", "B3T"))
                         if msg:
                             notify.discord(msg)
         except Exception:
