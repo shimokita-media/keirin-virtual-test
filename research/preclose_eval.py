@@ -11,7 +11,7 @@ HERE = os.path.dirname(os.path.abspath(__file__)); BASE = os.path.dirname(HERE)
 sys.path.insert(0, BASE)
 import kr, tri_rule, wide_rule
 START = "20261106"
-FRAMES = {"B1W": "🎯ワイド枠（通知中）", "B3T": "🎰3連単枠（通知中・11/9〜記録）", "B3K": "👀形のワイド（記録のみ・11/9〜）", "B3A": "👀ワイドA（記録のみ・11/9〜）", "B1R": "📐法則枠（記録のみ）"}
+FRAMES = {"B1W": "🎯ワイド枠（通知中）", "B3T": "🎰3連単枠（通知中・11/9〜記録）", "B3T1": "⭐3連単枠の一番の目1点（選び直しで確認）", "B3K": "👀形のワイド（記録のみ・11/9〜）", "B3A": "👀ワイドA（記録のみ・11/9〜）", "B1R": "📐法則枠（記録のみ）"}
 
 
 def pick_all(con, row, od):
@@ -22,6 +22,7 @@ def pick_all(con, row, od):
     rp, _ = kr.rule_picks(con, row, od)
     out["B1R"] = [(r["bet_type"], r["combo"], r["odds"]) for r in rp]
     out["B3T"] = [("3連単", r["combo"], r["odds"]) for r in tri_rule.picks(con, row, od)]
+    out["B3T1"] = out["B3T"][:1]  # 一番の目：当たった法則の数が多い順・倍率の低い順で1番目（tri_rule.picks の並び順）
     wr = wide_rule.picks(con, row, od)
     out["B3A"] = [("ワイド", r["combo"], r["odds"]) for r in wr["B3A"]]
     out["B3K"] = [("ワイド", r["combo"], r["odds"]) for r in wr["B3K"]]
