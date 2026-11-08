@@ -38,6 +38,25 @@ def rules(T, m):
     sw = sw.merge(T[["race_id", "combo", "odds", "ret"]], on=["race_id", "combo"], how="left")
     sw["ret"] = sw.ret.fillna(0)  # 300倍超などで表に無い目は払戻0扱いにせず、確定の払戻を引く
     out["10 機械(簡易)・9の1点＋2着3着入替（2点）"] = pd.concat([out["9 機械(簡易)・60倍以下×1.1・1レース1点"], sw])
+    # 機械つき3連単枠（2026-11-08 固定 tri_ml_v1：締切前でも変わりにくい手がかりだけ。基準は2026/7〜8で決めた 0.8 と 1.05）
+    try:
+        import json as _j
+        cfg = _j.load(open(os.path.join(HERE, "tri_ml_v1.json"))); mm = lgb.Booster(model_file=os.path.join(HERE, "tri_ml_v1.txt"))
+        U = T.copy()
+        for i, (k, v) in enumerate(R.items()): U[f"rule{i+1}"] = 0.0
+        RR = [third & (T.odds <= 30) & nine & d2, same3 & (T.odds <= 30) & nine & d2, same3 & (T.odds <= 30) & nine & (T.g_tf > 0),
+              order & (T.odds <= 60) & maru & (T.g_tf > 0) & (T.g_ex > 0), third & (T.odds <= 10) & (T.G == 1) & (T.r0_mk_rank == 1)]
+        for i, x in enumerate(RR): U[f"rule{i+1}"] = x.astype(float)
+        U["nr"] = sum(x.astype(int) for x in RR)
+        for j in range(3): U[f"r{j}_style"] = U[f"r{j}_style"].map({"逃": 0, "両": 1, "追": 2})
+        Fm = cfg["F"]
+        for f in Fm: U[f] = pd.to_numeric(U[f], errors="coerce").astype(np.float32) if f in U else np.nan
+        U["evm"] = 1 / (1 + np.exp(-(mm.predict(U[Fm], raw_score=True) + U.lp))) * U.odds
+        B = U[U.nr > 0].sort_values(["race_id", "nr", "odds"], ascending=[True, False, True]).groupby("race_id").head(6)
+        out["★機械つき 3連単枠×機械≥0.8"] = B[B.evm >= 0.8][["race_id", "date", "combo", "odds", "ret"]]
+        out["★機械つき 3連単枠の上位1点（機械≥1.05）"] = B[B.evm >= 1.05].sort_values("evm").groupby("race_id").tail(1)[["race_id", "date", "combo", "odds", "ret"]]
+    except Exception as e:
+        print("tri_ml ERR", repr(e))
     Y = T[(T.odds <= 60) & (T.ev >= 1.0)].sort_values("ev").groupby("race_id").tail(1)
     out["（参考・後から追加）機械(簡易)・60倍以下×1.0・1レース1点"] = Y[["race_id", "date", "combo", "odds", "ret"]]
     return out
