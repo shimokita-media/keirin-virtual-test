@@ -11,7 +11,7 @@ HERE = os.path.dirname(os.path.abspath(__file__)); BASE = os.path.dirname(HERE)
 sys.path.insert(0, BASE)
 import kr, tri_rule, wide_rule
 START = "20261106"
-FRAMES = {"B1W": "🎯ワイド枠（通知中）", "B3T": "🎰3連単枠（通知中・11/9〜記録）", "B3T1": "⭐3連単枠の一番の目1点（選び直しで確認）", "B3K": "👀形のワイド（記録のみ・11/9〜）", "B3A": "👀ワイドA（記録のみ・11/9〜）", "B1R": "📐法則枠（記録のみ）"}
+FRAMES = {"B1W": "🎯ワイド枠（通知中）", "B3T": "🎰3連単枠（通知中・11/9〜記録）", "B3T1": "⭐3連単枠の一番の目1点（選び直しで確認）", "B3TB": "⭐一番の目×ラインの先頭のB（バック回数）がレースで一番多い（選び直しで確認）", "B3K": "👀形のワイド（記録のみ・11/9〜）", "B3A": "👀ワイドA（記録のみ・11/9〜）", "B1R": "📐法則枠（記録のみ）"}
 
 
 def pick_all(con, row, od):
@@ -23,6 +23,13 @@ def pick_all(con, row, od):
     out["B1R"] = [(r["bet_type"], r["combo"], r["odds"]) for r in rp]
     out["B3T"] = [("3連単", r["combo"], r["odds"]) for r in tri_rule.picks(con, row, od)]
     out["B3T1"] = out["B3T"][:1]  # 一番の目：当たった法則の数が多い順・倍率の低い順で1番目（tri_rule.picks の並び順）
+    out["B3TB"] = []
+    if out["B3T1"]:  # 一番の目の3着の選手がいるラインの先頭が、各ラインの先頭の中でバック回数（B）が一番多いときだけ（2026-11-09 追加）
+        lines = [[n for x in l["entries"] for n in x["numbers"]] for l in json.loads(row["line_json"] or "[]")]
+        nb = dict(con.execute("SELECT number, COALESCE(n_back,0) FROM entries WHERE race_id=? AND absent=0", (row["race_id"],)).fetchall())
+        third = int(out["B3T1"][0][1].split("-")[2]); main = next((l for l in lines if third in l), None)
+        if main and nb.get(main[0], 0) >= max(nb.get(l[0], 0) for l in lines):
+            out["B3TB"] = out["B3T1"]
     wr = wide_rule.picks(con, row, od)
     out["B3A"] = [("ワイド", r["combo"], r["odds"]) for r in wr["B3A"]]
     out["B3K"] = [("ワイド", r["combo"], r["odds"]) for r in wr["B3K"]]
