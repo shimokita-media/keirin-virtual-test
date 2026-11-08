@@ -63,15 +63,9 @@ def picks_message(r, close_hm, mins, rule, wide):
     L = [f"🚴 **{r['venue']} {r['race_no']}R**　⏰ 締切 {close_hm}（あと{mins:.0f}分）"]
     if wide:
         L.append("🎯 **ワイド枠**")
+        # 2026-11-09〜 新しい点数（🔥/⭐）の表示はやめた（未使用データ2回で効果なし）。点数は記録（bet_rating）にだけ残す
         for p in wide:
-            s = p.get("score")
-            if s is None:
-                L.append(f"　・**{p['combo']}**　{p['odds']}倍")
-            else:
-                mark = "🔥" if s >= 3 else "⭐"
-                L.append(f"　・**{p['combo']}**　{p['odds']}倍　{mark}**{s}点**（{'・'.join(p.get('why') or []) or 'なし'}）")
-        if any((p.get("score") or 0) >= 3 for p in wide):
-            L.append("🔥＝新しい点数で3点以上（過去の最終オッズでは142%。締切前での確認はこれから）")
+            L.append(f"　・**{p['combo']}**　{p['odds']}倍")
     if rule:
         L.append("📐 **法則枠**")
         L += [f"　・{p['bet_type']} **{p['combo']}**　{p['odds']}倍" for p in rule]
