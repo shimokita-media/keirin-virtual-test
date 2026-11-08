@@ -14,27 +14,7 @@ START = "20261106"
 FRAMES = {"B1W": "🎯ワイド枠（通知中）", "B3T": "🎰3連単枠（通知中・11/9〜記録）", "B3T1": "⭐3連単枠の一番の目1点（選び直しで確認）", "B3TB": "⭐一番の目×ラインの先頭のB（バック回数）がレースで一番多い（選び直しで確認）", "B3TS": "⭐一番の目×出走表の点数3以上（選び直しで確認）", "B3K": "👀形のワイド（記録のみ・11/9〜）", "B3A": "👀ワイドA（記録のみ・11/9〜）", "B1R": "📐法則枠（記録のみ）"}
 
 
-def card_score(con, row, combo):
-    """出走表の点数（2026-11-09 追加、KNOWLEDGE 参照）：先頭のBが一番多い・先頭34歳以上・3番手のコメントがはっきりしない・
-    ラインの得点がいちばん強いほかのラインより低い・3着の選手の上がりがレース1〜2位 を各+1、4人ラインは-1"""
-    import re
-    lines = [[n for x in l["entries"] for n in x["numbers"]] for l in json.loads(row["line_json"] or "[]")]
-    E = {r[0]: r for r in con.execute("SELECT number, COALESCE(n_back,0), age, comment, race_point, agari_avg, name FROM entries WHERE race_id=? AND absent=0", (row["race_id"],))}
-    d = int(combo.split("-")[2]); main = next((l for l in lines if d in l), None)
-    if not main or len(main) < 2: return 0
-    sc = 0
-    if E.get(main[0], (0, 0))[1] >= max(E.get(l[0], (0, 0))[1] for l in lines): sc += 1
-    if (E.get(main[0], (0, 0, 0))[2] or 0) >= 34: sc += 1
-    cm3 = str(E[main[2]][3] or "") if len(main) >= 3 and main[2] in E else ""
-    sur = str(E[main[1]][6] or "")[:2] if main[1] in E else ""
-    if len(main) < 3 or not (re.search(r"[3３]番手", cm3) or (sur and sur in cm3)): sc += 1
-    rp = lambda l: np.nanmean([E[n][4] for n in l if n in E and E[n][4] is not None] or [np.nan])
-    oth = [rp(l) for l in lines if l is not main and len(l) >= 2]
-    if oth and rp(main) < max(oth): sc += 1
-    ag = sorted((E[n][5], n) for n in E if E[n][5] is not None)
-    if d in [n for _, n in ag[:2]]: sc += 1
-    if len(main) >= 4: sc -= 1
-    return sc
+from tri_rule import card_score  # 点数の計算は tri_rule.py に一本化（2026-11-09）
 
 
 def pick_all(con, row, od):

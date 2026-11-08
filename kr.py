@@ -526,8 +526,13 @@ def record_trifecta(con, row, odds, meta):
         return None
     import tri_rule
     picks = tri_rule.picks(con, row, odds)
+    if picks:  # 一番の目（並びの1番目）に出走表の点数をつける（2026-11-09〜、表示と記録だけ。買い目は変えない）
+        try:
+            picks[0]["top"] = True; picks[0]["score"] = tri_rule.card_score(con, row, picks[0]["combo"])
+        except Exception:
+            picks[0]["top"] = True; picks[0]["score"] = None
     created = now().isoformat(timespec="seconds")
-    recs = [(r["combo"], 100, r["odds"], r["p"], "・".join(r["rules"])) for r in picks] or [("", 0, None, None, "C")]
+    recs = [(r["combo"], 100, r["odds"], r["p"], "・".join(r["rules"]) + (f" 一番の目 点{r['score']}" if r.get("top") and r.get("score") is not None else (" 一番の目" if r.get("top") else ""))) for r in picks] or [("", 0, None, None, "C")]
     for c, s_, o, p, tag in recs:
         bt = "3連単" if s_ else "見送り"
         sha = hashlib.sha256(f"{row['race_id']}|B3T|{created}|{c}|{s_}|{o}".encode()).hexdigest()[:16]

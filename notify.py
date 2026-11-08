@@ -82,7 +82,12 @@ def picks_message(r, close_hm, mins, rule, wide, tri=()):
     if tri:
         L.append("🎰 **3連単枠**")
         for p in tri:
-            L.append(f"　・**{p['combo']}**　{p['odds']}倍")
+            if p.get("top"):
+                sc = p.get("score")
+                hint = {500: "　💰目安500円", 100: "　💰目安100円"}.get(__import__("tri_rule").stake_hint(sc) if sc is not None else 0, "")
+                L.append(f"　・⭐ **{p['combo']}**　{p['odds']}倍　【一番の目・点数{sc if sc is not None else '?'}】{hint}")
+            else:
+                L.append(f"　・**{p['combo']}**　{p['odds']}倍")
     if rule:
         L.append("📐 **法則枠**")
         L += [f"　・{p['bet_type']} **{p['combo']}**　{p['odds']}倍" for p in rule]
