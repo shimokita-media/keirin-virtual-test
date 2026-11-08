@@ -83,6 +83,10 @@ def tick(con, done_results):
                         tri = kr.record_trifecta(con, r, odds, meta) or []
                     except Exception:
                         say("ERR B3T", rid, traceback.format_exc()[-300:]); tri = []
+                    try:  # 様子見のワイド2枠（B3A・B3K、2026-11-09〜）。通知はせず記録だけ
+                        kr.record_watch(con, r, odds, meta)
+                    except Exception:
+                        say("ERR B3A/B3K", rid, traceback.format_exc()[-300:])
                     if out:
                         picks, cond, m = out
                         say("B1R", r["venue"], r["race_no"], "R", len(picks), "点", cond, "/ B1W", len(wide), "点", "/ B3T", len(tri), "点")

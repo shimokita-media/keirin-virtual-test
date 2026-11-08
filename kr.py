@@ -544,6 +544,32 @@ def record_trifecta(con, row, odds, meta):
     return picks
 
 
+def record_watch(con, row, odds, meta):
+    """様子見の2枠 B3A（ワイドA）・B3K（形のワイド）（2026-11-09〜、ユーザー依頼）。通知はせず記録だけ。
+    締切2〜3分前の倍率で判断して各100円（最大5点）を記録し、読み戻しで一致を確認する"""
+    mins = (row["close_at"] - time.time()) / 60
+    if not (1.5 <= mins <= 8.0):
+        return None
+    import wide_rule
+    res = wide_rule.picks(con, row, odds)
+    created = now().isoformat(timespec="seconds")
+    for ph, picks in res.items():
+        recs = [(r["combo"], 100, r["odds"], r["p"], r["ev"]) for r in picks] or [("", 0, None, None, None)]
+        for c, s_, o, p, ev in recs:
+            bt = "ワイド" if s_ else "見送り"
+            sha = hashlib.sha256(f"{row['race_id']}|{ph}|{created}|{c}|{s_}|{o}".encode()).hexdigest()[:16]
+            con.execute("""INSERT INTO predictions(race_id,phase,created_at,close_at,minutes_to_close,bet_type,combo,stake,
+                ref_odds,ref_source,ref_odds_fetched_at,ref_source_updated_at,model_prob,ev_a10,ev_a115,bet_rating,race_rating,reason,sha)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                        (row["race_id"], ph, created, ts(row["close_at"]), round(mins, 1), bt, c, s_, o, meta["source"],
+                         meta["fetched_at"], meta["source_updated_at"], p, ev, None, f"割安度{ev:.2f}" if ev else "", "W" if picks else "C",
+                         json.dumps({ph: wide_rule.LABELS[ph]}, ensure_ascii=False), sha))
+        con.commit()
+        n = con.execute("SELECT COUNT(*) FROM predictions WHERE race_id=? AND phase=? AND created_at=?", (row["race_id"], ph, created)).fetchone()[0]
+        assert n == len(recs), f"{ph} read-back mismatch"
+    return res
+
+
 def test_track(con, row, odds, meta, rows, mins, excluded):
     """検証買い B1T（データを貯めるための別枠。B0/B1 とは別集計）。B1 と同時刻・同オッズで全レース記録する。
     1) 想定EV最上位（除外帯を除く）に200円
