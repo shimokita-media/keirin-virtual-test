@@ -549,6 +549,37 @@ def record_trifecta(con, row, odds, meta):
     return picks
 
 
+def record_best(con, row, odds, meta, tri):
+    """🏆最強枠 B3S（2026-11-09〜、ユーザー依頼・記録のみ）。3連単枠の一番の目の出走表の点数が3以上のときだけ、
+    一番の目の3連単（点数5=500円・3〜4=100円）＋同じ3人の3連複（100円）を記録。読み戻しで一致を確認する"""
+    mins = (row["close_at"] - time.time()) / 60
+    if not (1.5 <= mins <= 8.0):
+        return None
+    import tri_rule
+    top = next((p for p in (tri or []) if p.get("top")), None)
+    sc = top.get("score") if top else None
+    created = now().isoformat(timespec="seconds")
+    recs = []
+    if top and sc is not None and sc >= 3:
+        a, b, d = top["combo"].split("-"); trio = "-".join(sorted((a, b, d), key=int))
+        o3 = (odds.get("3連複", {}).get(trio) or (None,))[0]
+        recs = [("3連単", top["combo"], tri_rule.stake_hint(sc), top["odds"], f"一番の目 点{sc}"), ("3連複", trio, 100, o3, f"同じ3人 点{sc}")]
+    if not recs:
+        recs = [("見送り", "", 0, None, f"点{sc}" if sc is not None else "C")]
+    for bt, c, s_, o, tag in recs:
+        sha = hashlib.sha256(f"{row['race_id']}|B3S|{created}|{bt}|{c}|{s_}|{o}".encode()).hexdigest()[:16]
+        con.execute("""INSERT INTO predictions(race_id,phase,created_at,close_at,minutes_to_close,bet_type,combo,stake,
+            ref_odds,ref_source,ref_odds_fetched_at,ref_source_updated_at,model_prob,ev_a10,ev_a115,bet_rating,race_rating,reason,sha)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    (row["race_id"], "B3S", created, ts(row["close_at"]), round(mins, 1), bt, c, s_, o, meta["source"],
+                     meta["fetched_at"], meta["source_updated_at"], None, None, None, tag, "S" if s_ else "C",
+                     json.dumps({"最強枠": "一番の目×点数3以上：3連単（5点500円・3〜4点100円）＋同じ3人の3連複100円"}, ensure_ascii=False), sha))
+    con.commit()
+    n = con.execute("SELECT COUNT(*) FROM predictions WHERE race_id=? AND phase='B3S' AND created_at=?", (row["race_id"], created)).fetchone()[0]
+    assert n == len(recs), "B3S read-back mismatch"
+    return recs
+
+
 def record_watch(con, row, odds, meta):
     """様子見の2枠 B3A（ワイドA）・B3K（形のワイド）（2026-11-09〜、ユーザー依頼）。通知はせず記録だけ。
     締切2〜3分前の倍率で判断して各100円（最大5点）を記録し、読み戻しで一致を確認する"""

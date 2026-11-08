@@ -47,8 +47,8 @@ def discord(text):
             print(kr.now().strftime("%H:%M:%S"), "discord FAILED:", part.splitlines()[0], flush=True)
 
 
-LABEL = {"B1R": "法則枠", "B1W": "ワイド枠", "B3T": "3連単枠", "B3A": "ワイドA", "B3K": "形のワイド"}
-ICON = {"B1R": "📐", "B1W": "🎯", "B3T": "🎰", "B3A": "👀", "B3K": "👀"}
+LABEL = {"B1R": "法則枠", "B1W": "ワイド枠", "B3T": "3連単枠", "B3A": "ワイドA", "B3K": "形のワイド", "B3S": "最強枠"}
+ICON = {"B1R": "📐", "B1W": "🎯", "B3T": "🎰", "B3A": "👀", "B3K": "👀", "B3S": "🏆"}
 
 
 def pay_of(con, rid, bt, cb):
@@ -140,7 +140,7 @@ def day_summary(con, day):
         inv = sum(x[3] for x in rows)
         ret = sum(x[6] * x[3] // 100 for x in rows)
         hits = [x for x in rows if x[6] and con.execute("SELECT 1 FROM payouts WHERE race_id=? AND bet_type=? AND combo=?", (x[0], x[1], x[2])).fetchone()]  # 返還は的中に数えない
-        L.append(f"{ICON[ph]} **{label}**{'（記録のみ）' if ph in ('B1R', 'B3A', 'B3K') else ''}")
+        L.append(f"{ICON[ph]} **{label}**{'（記録のみ）' if ph in ('B1R', 'B3A', 'B3K', 'B3S') else ''}")
         L.append(f"　{len({x[0] for x in rows})}レース・{len(rows)}点・的中{len(hits)}　{yen(inv)} → {yen(ret)}（**{signed(ret - inv)}**）"
                  f"　回収率 **{ret / inv:.0%}**")
         if hits:
@@ -242,7 +242,7 @@ def metrics(con):
                 by[x[0]] = [0, 0]
                 order.append(x[0])
             by[x[0]][0] += x[3]
-            by[x[0]][1] += x[6] or 0
+            by[x[0]][1] += (x[6] or 0) * x[3] // 100  # 金額が100円以外でも正しく（2026-11-09）
         net = np.cumsum([by[k][1] - by[k][0] for k in order])
         dd = int((np.maximum.accumulate(np.concatenate([[0], net])) - np.concatenate([[0], net])).max())
         streak = cur = 0
@@ -268,7 +268,7 @@ def metrics(con):
                 continue
             ev = {(e["bet_type"], e["combo"]): e["evc"] for e in kr.evaluate(od)}
             fin_evc += [ev[(x[1], x[2])] for x in rows if x[0] == rid and (x[1], x[2]) in ev]
-        if fin_evc and ph not in ("B3T", "B3K"):  # 3連単枠は形で選ぶので、この割安度は当てはまらない
+        if fin_evc and ph not in ("B3T", "B3K", "B3S"):  # 3連単枠は形で選ぶので、この割安度は当てはまらない
             fe = np.array(fin_evc)
             out.append(f"　💎 最終でも割安だった割合：**{np.mean(fe >= 1):.0%}**（割安度の中央値 {np.median(fe):.2f}。ここが増えるほど本物）")
         out.append(f"　💰 累計 **{signed(int(net[-1]))}**　／ 最大のへこみ {signed(-dd)}　／ 最大の連敗 {streak}レース")

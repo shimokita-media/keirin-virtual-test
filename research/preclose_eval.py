@@ -11,7 +11,7 @@ HERE = os.path.dirname(os.path.abspath(__file__)); BASE = os.path.dirname(HERE)
 sys.path.insert(0, BASE)
 import kr, tri_rule, wide_rule
 START = "20261106"
-FRAMES = {"B1W": "🎯ワイド枠（通知中）", "B3T": "🎰3連単枠（通知中・11/9〜記録）", "B3T1": "⭐3連単枠の一番の目1点（選び直しで確認）", "B3TB": "⭐一番の目×ラインの先頭のB（バック回数）がレースで一番多い（選び直しで確認）", "B3TS": "⭐一番の目×出走表の点数3以上（選び直しで確認）", "B3K": "👀形のワイド（記録のみ・11/9〜）", "B3A": "👀ワイドA（記録のみ・11/9〜）", "B1R": "📐法則枠（記録のみ）"}
+FRAMES = {"B3S": "🏆最強枠：一番の目×点数3以上（3連単 5点500円・3〜4点100円＋3連複100円）", "B1W": "🎯ワイド枠（通知中）", "B3T": "🎰3連単枠（通知中・11/9〜記録）", "B3T1": "⭐3連単枠の一番の目1点（選び直しで確認）", "B3TB": "⭐一番の目×ラインの先頭のB（バック回数）がレースで一番多い（選び直しで確認）", "B3TS": "⭐一番の目×出走表の点数3以上（選び直しで確認）", "B3K": "👀形のワイド（記録のみ・11/9〜）", "B3A": "👀ワイドA（記録のみ・11/9〜）", "B1R": "📐法則枠（記録のみ）"}
 
 
 from tri_rule import card_score  # 点数の計算は tri_rule.py に一本化（2026-11-09）
@@ -33,9 +33,14 @@ def pick_all(con, row, od):
         third = int(out["B3T1"][0][1].split("-")[2]); main = next((l for l in lines if third in l), None)
         if main and nb.get(main[0], 0) >= max(nb.get(l[0], 0) for l in lines):
             out["B3TB"] = out["B3T1"]
-    out["B3TS"] = []
-    if out["B3T1"] and card_score(con, row, out["B3T1"][0][1]) >= 3:
-        out["B3TS"] = out["B3T1"]
+    out["B3TS"] = []; out["B3S"] = []
+    if out["B3T1"]:
+        sc = card_score(con, row, out["B3T1"][0][1])
+        if sc >= 3:
+            out["B3TS"] = out["B3T1"]
+            import tri_rule as _tr
+            cb, o = out["B3T1"][0][1], out["B3T1"][0][2]; trio = "-".join(sorted(cb.split("-"), key=int))
+            out["B3S"] = [("3連単", cb, o, _tr.stake_hint(sc)), ("3連複", trio, (od.get("3連複", {}).get(trio) or (None,))[0], 100)]
     wr = wide_rule.picks(con, row, od)
     out["B3A"] = [("ワイド", r["combo"], r["odds"]) for r in wr["B3A"]]
     out["B3K"] = [("ワイド", r["combo"], r["odds"]) for r in wr["B3K"]]
@@ -68,7 +73,7 @@ def main(db):
     # A. 実際に記録した買い目
     P = pd.read_sql(f"SELECT race_id, phase, bet_type, combo, stake, ref_odds FROM predictions WHERE stake>0 AND phase IN ({','.join('?'*len(FRAMES))}) AND race_id IN ({q})", con, params=tuple(FRAMES) + ids)
     for rid, ph, bt, cb, st, o in P.itertuples(index=False):
-        rows.append(("A", ph, rid, bt, cb, o))
+        rows.append(("A", ph, rid, bt, cb, o, st))
     # B/C. 記録した倍率から選び直す
     for (rid, ph), od in ODS.items():
         if ph not in ("B1R", "T1", "POST") or not od["3連単"]: continue
@@ -78,23 +83,23 @@ def main(db):
         except Exception as e: print("ERR", rid, ph, repr(e)); continue
         tag = {"B1R": "B", "T1": "B1", "POST": "C"}[ph]
         for fr, ps in picks.items():
-            for bt, cb, o in ps: rows.append((tag, fr, rid, bt, cb, o))
-    D = pd.DataFrame(rows, columns=["kind", "frame", "race_id", "bet_type", "combo", "odds"]).drop_duplicates(["kind", "frame", "race_id", "bet_type", "combo"])
+            for x in ps: rows.append((tag, fr, rid, x[0], x[1], x[2], x[3] if len(x) > 3 else 100))
+    D = pd.DataFrame(rows, columns=["kind", "frame", "race_id", "bet_type", "combo", "odds", "stake"]).drop_duplicates(["kind", "frame", "race_id", "bet_type", "combo"])
     st = [settle(r, b, c) for r, b, c in zip(D.race_id, D.bet_type, D.combo)]
     D["pay"] = [s[0] for s in st]; D["note"] = [s[1] for s in st]
     D["date"] = D.race_id.map(lambda r: races[r]["date"])
     D["fin"] = [fin_odds.get((r, b, c)) for r, b, c in zip(D.race_id, D.bet_type, D.combo)]
-    pend = D[D.pay.isna()]; S = D[D.pay.notna()].copy(); S["ret"] = S.pay / 100
+    pend = D[D.pay.isna()]; S = D[D.pay.notna()].copy(); S["ret"] = S.pay / 100; S["back"] = S.pay * S.stake / 100
 
     def line(g):
         if not len(g): return "| 0 | − | − | − | − | − | − |"
-        by = g.groupby("race_id").agg(inv=("ret", "size"), r=("ret", "sum"))
+        by = g.groupby("race_id").agg(inv=("stake", "sum"), r=("back", "sum"))
         i = np.random.default_rng(0).integers(0, len(by), (2000, len(by))); bs = by.r.to_numpy()[i].sum(1) / by.inv.to_numpy()[i].sum(1)
         ch = (g.fin / g.odds - 1).dropna()
-        return (f"| {len(g)} | {g.race_id.nunique()} | {int(((g.ret > 0) & (g.note != '返還')).sum())} | {len(g)*100:,}円→{int(g.pay.sum()):,}円 | **{g.ret.mean():.0%}** "
+        return (f"| {len(g)} | {g.race_id.nunique()} | {int(((g.ret > 0) & (g.note != '返還')).sum())} | {int(g.stake.sum()):,}円→{int(g.back.sum()):,}円 | **{g.back.sum() / g.stake.sum():.0%}** "
                 f"| {np.percentile(bs,2.5):.0%}〜{np.percentile(bs,97.5):.0%} | {('%+.0f%%' % (np.median(ch)*100)) if len(ch) else '−'} |")
     d0, d1 = S.date.min(), S.date.max()
-    L = [f"# 締切前に固定した買い目 × 確定の払戻（{d0[4:6]}/{d0[6:]}〜{d1[4:6]}/{d1[6:]}・各100円）\n",
+    L = [f"# 締切前に固定した買い目 × 確定の払戻（{d0[4:6]}/{d0[6:]}〜{d1[4:6]}/{d1[6:]}・金額は枠の決まりどおり、ほかは各100円）\n",
          "条件は今のまま固定。払戻は確定の払戻表だけ（判断後の欠場は返還）。払戻表が無いレースは未確定で除外。",
          "「買った時→最終」は、選んだ時点の倍率から最終の倍率への変化（中央値。マイナス＝払戻が減った）。\n",
          "| 枠 | 種類 | 点数 | レース | 的中 | 投資→払戻 | 回収率 | 95%の範囲 | 買った時→最終 |", "|---|---|---|---|---|---|---|---|---|"]
@@ -110,7 +115,7 @@ def main(db):
         cells = []
         for d in sorted(S.date.unique()):
             b = S[(S.frame == fr) & (S.kind == "B") & (S.date == d)]; a = S[(S.frame == fr) & (S.kind == "A") & (S.date == d)]
-            cells.append((f"{b.ret.mean():.0%}({len(b)})" if len(b) else "−") + " ／ " + (f"{a.ret.mean():.0%}({len(a)})" if len(a) else "−"))
+            cells.append((f"{b.back.sum() / b.stake.sum():.0%}({len(b)})" if len(b) else "−") + " ／ " + (f"{a.back.sum() / a.stake.sum():.0%}({len(a)})" if len(a) else "−"))
         L.append(f"| {lab} | " + " | ".join(cells) + " |")
     # 一致の確認（実際の記録 と 判断時点の選び直し）
     L += ["\n## 選び直しの正しさの確認（同じ判断時点の倍率から、実際の記録と同じ目を選べているか）"]

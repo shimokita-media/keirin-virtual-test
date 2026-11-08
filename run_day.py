@@ -83,6 +83,10 @@ def tick(con, done_results):
                         tri = kr.record_trifecta(con, r, odds, meta) or []
                     except Exception:
                         say("ERR B3T", rid, traceback.format_exc()[-300:]); tri = []
+                    try:  # 🏆最強枠（B3S、2026-11-09〜）。通知はせず記録だけ
+                        kr.record_best(con, r, odds, meta, tri)
+                    except Exception:
+                        say("ERR B3S", rid, traceback.format_exc()[-300:])
                     try:  # 様子見のワイド2枠（B3A・B3K、2026-11-09〜）。通知はせず記録だけ
                         kr.record_watch(con, r, odds, meta)
                     except Exception:
