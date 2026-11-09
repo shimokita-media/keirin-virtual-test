@@ -1,0 +1,4 @@
+# 機械（LightGBM）のファイルは改行を書き換えない（Windows の自動変換で CRLF にされると読み込めなくなる。2026-11-09 に実際に起きた）
+research/*.txt -text
+*.pkl binary
+*.npy binary
