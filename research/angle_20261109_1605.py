@@ -1,7 +1,7 @@
 """切り口：ギア倍数。重いギアの選手（先行・捲りでスピードを持続）と軽いギアの選手の差を、市場が織り込んでいるか。"""
 import sys
 exec(open("C:/Users/take0/.claude/keirin/research/angle_base.py", encoding="utf-8").read())
-con = sqlite3.connect("file:" + K + "keirin.sqlite?mode=ro", uri=True)
+con = sqlite3.connect("file:" + K + "keirin.sqlite?mode=ro&immutable=1", uri=True)
 E = pd.read_sql("SELECT e.race_id, e.gear FROM entries e JOIN races r USING(race_id) WHERE r.date >= '20250201' AND e.absent = 0", con)
 E["gear"] = pd.to_numeric(E.gear, errors="coerce")
 gmax, gmin = E.groupby("race_id").gear.max(), E.groupby("race_id").gear.min()

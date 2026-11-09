@@ -2,7 +2,7 @@
 間隔の計算は2025/1以降の開催だけを使う（2024年のデータは事前登録R・S・Tのため使わない）。"""
 import sys
 exec(open("C:/Users/take0/.claude/keirin/research/angle_base.py", encoding="utf-8").read())
-con = sqlite3.connect("file:" + K + "keirin.sqlite?mode=ro", uri=True)
+con = sqlite3.connect("file:" + K + "keirin.sqlite?mode=ro&immutable=1", uri=True)
 E = pd.read_sql("SELECT e.race_id, e.number, e.player_id, r.date, r.cup_id FROM entries e JOIN races r USING(race_id) WHERE r.date >= '20250101' AND e.absent = 0", con)
 E["d"] = pd.to_datetime(E.date)
 cup = E.groupby(["player_id", "cup_id"]).d.agg(["min", "max"]).reset_index().sort_values(["player_id", "min"])

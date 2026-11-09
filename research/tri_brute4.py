@@ -14,7 +14,7 @@ A0 = pd.concat([pd.read_pickle(SP + "tri3_all.pkl"), pd.read_pickle(SP + "tri3_n
 A0 = A0[A0.date >= "20250201"].drop_duplicates(["race_id", "combo"]).reset_index(drop=True)
 W = prep(A0); del A0
 W = W[(W["class"] != "L級") & (W.odds <= 300)].reset_index(drop=True)
-con = sqlite3.connect("file:" + K + "keirin.sqlite?mode=ro", uri=True)
+con = sqlite3.connect("file:" + K + "keirin.sqlite?mode=ro&immutable=1", uri=True)
 rt = pd.Series(dict(con.execute("SELECT race_id, race_type FROM races").fetchall()))
 W["rt"] = W.race_id.map(rt).fillna("").astype(str)
 s01, s12 = W.s01 == 1, W.s12 == 1; same3 = s01 & s12; order = same3 & (W.r0_pos == 0) & (W.r1_pos == 1) & (W.r2_pos == 2)

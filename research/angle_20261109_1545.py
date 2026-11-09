@@ -9,7 +9,7 @@ VP = {"函館": "北海道", "青森": "青森", "いわき平": "福島", "弥�
       "名古屋": "愛知", "豊橋": "愛知", "岐阜": "岐阜", "大垣": "岐阜", "富山": "富山", "松阪": "三重", "四日市": "三重", "福井": "福井", "奈良": "奈良",
       "向日町": "京都", "和歌山": "和歌山", "岸和田": "大阪", "玉野": "岡山", "広島": "広島", "防府": "山口", "高松": "香川", "小松島": "徳島", "高知": "高知",
       "松山": "愛媛", "小倉": "福岡", "久留米": "福岡", "武雄": "佐賀", "佐世保": "長崎", "別府": "大分", "熊本": "熊本"}
-con = sqlite3.connect("file:" + K + "keirin.sqlite?mode=ro", uri=True)
+con = sqlite3.connect("file:" + K + "keirin.sqlite?mode=ro&immutable=1", uri=True)
 ids = T.race_id.unique()
 E = pd.read_sql("SELECT race_id, number, prefecture FROM entries", con)
 E = E[E.race_id.isin(set(ids))]

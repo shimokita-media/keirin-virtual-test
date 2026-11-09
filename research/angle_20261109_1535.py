@@ -1,7 +1,7 @@
 """切り口：級班の混ざり方（S1・S2・A1…。数字が小さいほど上位）。格上・格下が混ざるレースで、市場は格上を買いすぎ／格下を軽く見ていないか。"""
 import sys
 exec(open("C:/Users/take0/.claude/keirin/research/angle_base.py", encoding="utf-8").read())
-con = sqlite3.connect("file:" + K + "keirin.sqlite?mode=ro", uri=True)
+con = sqlite3.connect("file:" + K + "keirin.sqlite?mode=ro&immutable=1", uri=True)
 E = pd.read_sql("SELECT e.race_id, e.number, e.class AS c, e.grp AS g FROM entries e JOIN races r USING(race_id) WHERE r.date >= '20250201' AND e.absent = 0", con)
 E["rk"] = pd.to_numeric(E.c, errors="coerce") * 10 + pd.to_numeric(E.g, errors="coerce")
 top_rk = E.groupby("race_id").rk.min(); nkind = E.groupby("race_id").rk.nunique()

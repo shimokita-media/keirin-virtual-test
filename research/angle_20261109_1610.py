@@ -6,7 +6,7 @@ import sys
 exec(open("C:/Users/take0/.claude/keirin/research/angle_base.py", encoding="utf-8").read())
 OUT = open(sys.argv[1], "w", encoding="utf-8")
 def P(*a): print(*a, file=OUT, flush=True)
-con = sqlite3.connect("file:" + K + "keirin.sqlite?mode=ro", uri=True)
+con = sqlite3.connect("file:" + K + "keirin.sqlite?mode=ro&immutable=1", uri=True)
 q = 1.0 / T.odds; T["pm"] = q / q.groupby(T.race_id).transform("sum")
 a, b, c = combo_parts(T)
 L = pd.concat([pd.DataFrame({"race_id": T.race_id, "number": n, "pm": T.pm}) for n in (a, b, c)])

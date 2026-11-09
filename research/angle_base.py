@@ -15,7 +15,7 @@ else:
     A0 = A0[A0.date >= "20250201"].drop_duplicates(["race_id", "combo"]).reset_index(drop=True)
     T = prep(A0); del A0
     T = T[(T["class"] != "L級") & (T.odds <= 300)].reset_index(drop=True)
-    con = sqlite3.connect("file:" + K + "keirin.sqlite?mode=ro", uri=True)
+    con = sqlite3.connect("file:" + K + "keirin.sqlite?mode=ro&immutable=1", uri=True)
     R = pd.read_sql("SELECT race_id, race_type, venue, venue_id, cup_id, close_at, start_at FROM races", con).set_index("race_id")
     for c in R.columns: T[c] = T.race_id.map(R[c])
     s01, s12 = T.s01 == 1, T.s12 == 1; third = (T.r2_pos == 2) & s12; same3 = s01 & s12

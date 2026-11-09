@@ -2,7 +2,7 @@
 あわせて、今日の候補 U（級班2種類以上）・V（最終日の前日）・W（400m）を「残りとの差」の基準で見直す（判定は y4 で行う。ここでは参考）。"""
 import sys, json
 exec(open("C:/Users/take0/.claude/keirin/research/angle_base.py", encoding="utf-8").read())
-con = sqlite3.connect("file:" + K + "keirin.sqlite?mode=ro", uri=True)
+con = sqlite3.connect("file:" + K + "keirin.sqlite?mode=ro&immutable=1", uri=True)
 L = pd.read_sql("SELECT race_id, line_json FROM races WHERE date >= '20250201'", con)
 def comp(s):
     try:

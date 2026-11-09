@@ -2,7 +2,7 @@
 新人＝その月に走った選手の中で一番新しい期から2期以内。"""
 import sys
 exec(open("C:/Users/take0/.claude/keirin/research/angle_base.py", encoding="utf-8").read())
-con = sqlite3.connect("file:" + K + "keirin.sqlite?mode=ro", uri=True)
+con = sqlite3.connect("file:" + K + "keirin.sqlite?mode=ro&immutable=1", uri=True)
 E = pd.read_sql("SELECT e.race_id, e.number, e.term, r.date FROM entries e JOIN races r USING(race_id) WHERE r.date >= '20250201' AND e.absent = 0", con)
 E["term"] = pd.to_numeric(E.term, errors="coerce"); E["ym"] = E.date.str[:6]
 E["newest"] = E.groupby("ym").term.transform("max"); E["gap"] = E.newest - E.term
