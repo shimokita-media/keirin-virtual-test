@@ -59,7 +59,25 @@ def report(path, title, note, conds, D=None):
             f.write(f"| {nm} | " + " | ".join(fmt(summ(g)) for g in gs) + " |\n")
             for lab, g in zip(("全部", "30倍以下", "3連単枠", "一番の目"), gs): rows.append((nm, lab, summ(g)))
         ok = lambda s: all((s[k][0] or 0) >= 30 and s[k][1] > 1 for k in ("探す", "③", "⑥"))
-        c = [(a, b, s) for a, b, s in rows if ok(s) and s["探す"][2] >= 2.5]
+        # 3連単枠・一番の目は、それ自体が探す期間で120%超なので「100%との比較」だけだと大きな部分集合は何でも候補になる。
+        # → 残り（その条件に当てはまらない枠・一番の目）との差も、3期間とも上回り・探す期間の差の t値≥2.5 を求める（2026-11-09 15:55 追加）
+        f.write("\n## 3連単枠・一番の目：当てはまる／当てはまらないの差（探す / ③ / ⑥、差の t値は探す期間）\n")
+        diff = {}
+        for nm, m in conds.items():
+            m = m.reindex(D.index, fill_value=False).astype(bool)
+            for lab, G in (("3連単枠", Bx), ("一番の目", tx)):
+                mm = m[G.index]; a_, b_ = summ(G[mm]), summ(G[~mm])
+                x, y = G[mm & (per(G.date) == "探す")].ret, G[~mm & (per(G.date) == "探す")].ret
+                tdiff = (x.mean() - y.mean()) / np.sqrt(x.var(ddof=1) / max(len(x), 1) + y.var(ddof=1) / max(len(y), 1)) if len(x) > 1 and len(y) > 1 else np.nan
+                beats = all((a_[k][0] or 0) >= 30 and (b_[k][0] or 0) >= 30 and a_[k][1] > b_[k][1] for k in ("探す", "③", "⑥"))
+                diff[(nm, lab)] = (tdiff, beats)
+                f.write(f"- {nm} × {lab}: 当てはまる {fmt(a_)} ／ 当てはまらない {fmt(b_)} ／ 差のt={tdiff:.1f}{' ／ 3期間とも上' if beats else ''}\n")
+        def is_cand(a, b, s):
+            if not (ok(s) and s["探す"][2] >= 2.5): return False
+            if b in ("3連単枠", "一番の目"):
+                t_, bt = diff[(a, b)]; return bool(bt and t_ >= 2.5)
+            return True
+        c = [(a, b, s) for a, b, s in rows if is_cand(a, b, s)]
         f.write("\n## 候補（探す t≥2.5 かつ 3期間とも100%超・各30点以上）\n" + ("\n".join(f"- {a} × {b}: {fmt(s)}（t={s['探す'][2]:.1f}）" for a, b, s in c) or "- なし") + "\n")
         c2 = [(a, b, s) for a, b, s in rows if ok(s)]
         f.write("\n## 参考：3期間とも100%超（tは問わない）\n" + ("\n".join(f"- {a} × {b}: {fmt(s)}（t={s['探す'][2]:.1f}）" for a, b, s in c2) or "- なし") + "\n")
