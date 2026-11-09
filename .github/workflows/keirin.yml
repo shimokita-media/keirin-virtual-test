@@ -69,6 +69,12 @@ jobs:
         if: github.event_name == 'schedule' || inputs.mode == 'run'
         run: python -c "import backfill,datetime as d;y=(d.date.today()-d.timedelta(1)).strftime('%Y%m%d');backfill.main(y,y)"
 
+      - name: 前日分のレース後インタビューを補完（当日ループで取れなかった分だけ。失敗しても先へ進む）
+        if: github.event_name == 'schedule' || inputs.mode == 'run'
+        continue-on-error: true
+        timeout-minutes: 15
+        run: python -c "import backfill_interviews as bi,datetime as d;y=(d.date.today()-d.timedelta(1)).strftime('%Y%m%d');bi.main(y,y,kind='after')"
+
       - name: 当日ループ
         if: github.event_name == 'schedule' || inputs.mode == 'run'
         env:

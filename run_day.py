@@ -29,6 +29,8 @@ NOTIFY_RULE = False  # 2026-11-07〜 法則枠は通知せず記録のみ。Disc
 ONLY_RULE = True  # 2026-11-06〜 法則枠(B1R)のみ記録（B0/B1・検証買い・万車券枠は停止。結果回収は継続）
 COMMENT_WINDOW = (2.0, 30.0)  # 2026-11-10〜 netkeirin の選手コメントを取る時間帯（締切まで何分）。判断の窓（1分前ごろ）とは重ねない
 NK_TRIES = {}  # レースごとの選手コメント取得の回数（同じレースを何度も取りに行かないため）
+RESULT_IV_AFTER = (30, 90)  # 2026-11-10〜 締切から何分後にレース後インタビューを取りに行くか（2回まで。全員分そろったら2回目はしない）
+RIV_TRIES = {}  # レースごとのレース後インタビュー取得の回数
 B0_TARGET = 45   # 締切まで45分以下(30分以上)になった最初のループで B0
 B1_WINDOW = (1.0, 4.0)  # 締切まで1〜4分で B1
 
@@ -149,6 +151,23 @@ def tick(con, done_results):
                             notify.discord(msg)
         except Exception:
             say("ERR", rid, traceback.format_exc()[-400:])
+    # レース後インタビュー（WINTICKET の結果ページ。2026-11-10〜、ユーザー依頼）：締切30分後・90分後に見る。1ループ1件まで
+    for r in rs:
+        rid, since = r["race_id"], (time.time() - r["close_at"]) / 60
+        n_try = RIV_TRIES.get(rid, 0)
+        if n_try >= len(RESULT_IV_AFTER) or not (RESULT_IV_AFTER[n_try] <= since <= 240):
+            continue
+        try:
+            n_ent = con.execute("SELECT COUNT(*) FROM entries WHERE race_id=? AND absent=0", (rid,)).fetchone()[0]
+            n_have = con.execute("SELECT COUNT(*) FROM result_interviews WHERE race_id=?", (rid,)).fetchone()[0]
+            if n_ent and n_have >= n_ent:  # 全員分そろっている
+                RIV_TRIES[rid] = len(RESULT_IV_AFTER)
+                continue
+            RIV_TRIES[rid] = n_try + 1
+            kr.fetch_result_interviews(con, r)
+        except Exception:
+            say("ERR result_iv", rid, traceback.format_exc()[-200:])
+        break
 
 
 def heartbeat(con):

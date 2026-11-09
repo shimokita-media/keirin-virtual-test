@@ -86,6 +86,9 @@ def db():
       PRIMARY KEY(cup_id, player_id, kind));
     CREATE TABLE IF NOT EXISTS rider_comments(race_id TEXT, number INT, player_id TEXT, source TEXT, comment TEXT,
       fetched_at TEXT, PRIMARY KEY(race_id, number, source));
+    -- 2026-11-10〜 レース後インタビュー（WINTICKET の結果ページ。1レース1人1行）
+    CREATE TABLE IF NOT EXISTS result_interviews(race_id TEXT, player_id TEXT, cup_id TEXT, schedule_id TEXT, qa_json TEXT,
+      interviewer_type INT, interview_type INT, fetched_at TEXT, PRIMARY KEY(race_id, player_id));
     CREATE TABLE IF NOT EXISTS results(race_id TEXT, rank INT, number INT, player_id TEXT, factor TEXT,
       margin TEXT, fetched_at TEXT, PRIMARY KEY(race_id, rank, number));
     CREATE TABLE IF NOT EXISTS payouts(race_id TEXT, bet_type TEXT, combo TEXT, payout INT, popularity INT,
@@ -189,6 +192,50 @@ def save_interviews(con, q, rid, t, cup_id=None):
                            iv.get("createdAt"), iv.get("updatedAt"), t))
         n += max(cur.rowcount, 0)
     return n
+
+
+def result_url(row):
+    """レースの結果ページの「レース後コメント」の表示（ふつうのページ。robots.txt で禁止されているのは /keirin/cups/ だけ）"""
+    return (f"https://www.winticket.jp/keirin/{row['slug']}/raceresult/{row['cup_id']}/{row['day_index']}/{row['race_no']}"
+            "?type=race_result_interview")
+
+
+def save_result_interviews(con, q, rid, t):
+    """レース後インタビュー（結果ページのデータ FETCH_KEIRIN_RACE_RESULT_INTERVIEW_LIST）を result_interviews に保存する。
+    1レース1人1行。同じ中身なら書き換えない。戻り値: (中身のある人数, 新しく保存・更新した人数)"""
+    iv = q.get("FETCH_KEIRIN_RACE_RESULT_INTERVIEW_LIST") or {}
+    k = n = 0
+    for it in iv.get("interviews") or []:
+        th = it.get("threads") or []
+        if not th or not it.get("playerId"):
+            continue
+        k += 1
+        cur = con.execute("""INSERT INTO result_interviews VALUES(?,?,?,?,?,?,?,?)
+            ON CONFLICT(race_id, player_id) DO UPDATE SET qa_json=excluded.qa_json,
+              interviewer_type=excluded.interviewer_type, interview_type=excluded.interview_type
+            WHERE excluded.qa_json != result_interviews.qa_json""",
+                          (rid, it["playerId"], iv.get("cupId"), iv.get("scheduleId"), json.dumps(th, ensure_ascii=False),
+                           it.get("interviewerType"), it.get("interviewType"), t))
+        n += max(cur.rowcount, 0)
+    return k, n
+
+
+def fetch_result_interviews(con, row):
+    """レース後インタビューを取って保存する（2026-11-10 追加、ユーザー依頼）。結果ページ（result_url）のデータに本文が入っている。
+    オッズ・出走表などは書かない。WINTICKET に残っているのは 2025/12 ごろ以降。F1・F2 の最終日は取材対象外（空）。
+    戻り値: (中身のある人数, 新しく保存・更新した人数)。取得失敗は None"""
+    url = result_url(row)
+    rid = row["race_id"]
+    try:
+        q, _ = wt_state(url)
+    except Exception as e:
+        log(con, "winticket", url, rid, 0, 0, f"result_interviews {e!r}")
+        return None
+    t = now().isoformat(timespec="seconds")
+    k, n = save_result_interviews(con, q, rid, t)
+    con.commit()
+    log(con, "winticket", url, rid, 1, n, f"result_interviews {k}")
+    return k, n
 
 
 def fetch_race(con, row, phase=""):
