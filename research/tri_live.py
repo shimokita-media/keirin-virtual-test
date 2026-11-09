@@ -57,6 +57,19 @@ def rules(T, m):
         out["★機械つき 3連単枠の上位1点（機械≥1.05）"] = B[B.evm >= 1.05].sort_values("evm").groupby("race_id").tail(1)[["race_id", "date", "combo", "odds", "ret"]]
     except Exception as e:
         print("tri_ml ERR", repr(e))
+    # 事前登録Q（2026-11-09 固定 tri_struct_v1cand：形と出走表だけ・割安さは使わない。基準0.9は止めどころ26/7〜8と未使用25/10〜26/1の両方で確認済み）
+    try:
+        ms = lgb.Booster(model_file=os.path.join(HERE, "tri_struct_v1cand.txt")); V = T.copy()
+        for j in range(3): V[f"r{j}_sty"] = V[f"r{j}_style"].map({"逃": 0, "両": 1, "追": 2}).astype(float)
+        V["evs"] = 1 / (1 + np.exp(-(ms.predict(V[ms.feature_name()].astype(np.float32), raw_score=True) + V.lp))) * V.odds
+        RQ = [third & (T.odds <= 30) & nine & d2, same3 & (T.odds <= 30) & nine & d2, same3 & (T.odds <= 30) & nine & (T.g_tf > 0),
+              order & (T.odds <= 60) & maru & (T.g_tf > 0) & (T.g_ex > 0), third & (T.odds <= 10) & (T.G == 1) & (T.r0_mk_rank == 1)]
+        V["nr"] = sum(x.astype(int) for x in RQ)
+        BQ = V[V.nr > 0].sort_values(["race_id", "nr", "odds"], ascending=[True, False, True]).groupby("race_id").head(6)
+        out["★Q 3連単枠×形の機械≥0.9"] = BQ[BQ.evs >= 0.9][["race_id", "date", "combo", "odds", "ret"]]
+        out["★Q 3連単枠で形の機械が一番の目（≥0.9）1点"] = BQ[BQ.evs >= 0.9].sort_values("evs").groupby("race_id").tail(1)[["race_id", "date", "combo", "odds", "ret"]]
+    except Exception as e:
+        print("tri_struct ERR", repr(e))
     Y = T[(T.odds <= 60) & (T.ev >= 1.0)].sort_values("ev").groupby("race_id").tail(1)
     out["（参考・後から追加）機械(簡易)・60倍以下×1.0・1レース1点"] = Y[["race_id", "date", "combo", "odds", "ret"]]
     return out
