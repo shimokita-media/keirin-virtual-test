@@ -91,14 +91,22 @@ def tick(con, done_results):
                         kr.record_watch(con, r, odds, meta)
                     except Exception:
                         say("ERR B3A/B3K", rid, traceback.format_exc()[-300:])
+                    # 直前情報（2026-11-10〜、ユーザー了承）：欠場者がいるレースは3連単が3期間とも割高（36〜66%）なので、3連単枠は通知しない（記録は残す）
+                    try:
+                        absent_n = con.execute("SELECT COUNT(*) FROM entries WHERE race_id=? AND absent=1", (rid,)).fetchone()[0]
+                    except Exception:
+                        absent_n = 0
+                    tri_n = [] if absent_n else tri
+                    if absent_n and tri:
+                        notify.discord(f"⚠️ {r['venue']} {r['race_no']}R：欠場あり（{absent_n}人）→ 3連単枠 {len(tri)}点は見送り（記録だけ残す）")
                     if out:
                         picks, cond, m = out
-                        say("B1R", r["venue"], r["race_no"], "R", len(picks), "点", cond, "/ B1W", len(wide), "点", "/ B3T", len(tri), "点")
+                        say("B1R", r["venue"], r["race_no"], "R", len(picks), "点", cond, "/ B1W", len(wide), "点", "/ B3T", len(tri), "点", f"（欠場{absent_n}人）" if absent_n else "")
                         show_rule = picks if NOTIFY_RULE else []
-                        if show_rule or wide or tri:
-                            notify.discord(notify.picks_message(r, kr.ts(r["close_at"])[11:16], m, show_rule, wide, tri))
+                        if show_rule or wide or tri_n:
+                            notify.discord(notify.picks_message(r, kr.ts(r["close_at"])[11:16], m, show_rule, wide, tri_n))
                             notify.toast(f"競輪 {r['venue']}{r['race_no']}R 締切{kr.ts(r['close_at'])[11:16]}（あと{m:.0f}分）",
-                                         " / ".join(f"{p['bet_type']}{p['combo']} {p['odds']}倍" for p in show_rule + wide + tri))
+                                         " / ".join(f"{p['bet_type']}{p['combo']} {p['odds']}倍" for p in show_rule + wide + tri_n))
                         else:
                             # 0点のときも一言だけ送る（動いていないのか、買い目がないのかを見分けるため。2026-11-07〜）
                             notify.discord(f"⏭️ {r['venue']} {r['race_no']}R（締切 {kr.ts(r['close_at'])[11:16]}）：見送り（条件に合うワイド・3連単なし）")
