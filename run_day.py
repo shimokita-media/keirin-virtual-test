@@ -24,7 +24,7 @@ def keep_awake(on=True):
         pass
 
 SNAPSHOTS = {"T10": (9.0, 11.0), "T5": (4.5, 5.8), "T1": (0.4, 1.5)}  # 記録だけ（判断には使わない）
-DECIDE_WINDOW = (1.2, 2.2)  # 2026-11-10〜 締切1分半前ごろに判断（ユーザー了承：目減りを-10%→-3%に近づける）。11-07〜11-09 は2〜3分前、それまでは4〜7分前
+DECIDE_WINDOW = (0.75, 1.5)  # 2026-11-10〜 締切1分前ごろに判断（ユーザー希望：目減り約-3%）。11-07〜11-09 は2〜3分前、それまでは4〜7分前
 NOTIFY_RULE = False  # 2026-11-07〜 法則枠は通知せず記録のみ。Discord の買い目・結果はワイド枠だけ
 ONLY_RULE = True  # 2026-11-06〜 法則枠(B1R)のみ記録（B0/B1・検証買い・万車券枠は停止。結果回収は継続）
 B0_TARGET = 45   # 締切まで45分以下(30分以上)になった最初のループで B0
@@ -73,7 +73,7 @@ def tick(con, done_results):
                 else:
                     say("B0 skip (odds unavailable)", rid)
             elif DECIDE_WINDOW[0] <= mins <= DECIDE_WINDOW[1] and not has(con, rid, "B1R"):
-                # 締切1分半前ごろに判断（11/10〜、11/7〜9は2〜3分前）。ワイド枠は通知し、法則枠は通知せず記録だけする（2026-11-07〜）
+                # 締切1分前ごろに判断（11/10〜、11/7〜9は2〜3分前）。ワイド枠は通知し、法則枠は通知せず記録だけする（2026-11-07〜）
                 rd, odds, meta = kr.fetch_race(con, r, "B1R")
                 if odds and odds["3連単"]:
                     r = con.execute("SELECT * FROM races WHERE race_id=?", (rid,)).fetchone()
@@ -91,6 +91,10 @@ def tick(con, done_results):
                         kr.record_watch(con, r, odds, meta)
                     except Exception:
                         say("ERR B3A/B3K", rid, traceback.format_exc()[-300:])
+                    try:  # T枠（B3X、2026-11-10〜、ユーザー依頼）。通知はせず記録だけ
+                        kr.record_T(con, r, odds, meta)
+                    except Exception:
+                        say("ERR B3X", rid, traceback.format_exc()[-300:])
                     # 直前情報（2026-11-10〜、ユーザー了承）：欠場者がいるレースは3連単が3期間とも割高（36〜66%）なので、3連単枠は通知しない（記録は残す）
                     try:
                         absent_n = con.execute("SELECT COUNT(*) FROM entries WHERE race_id=? AND absent=1", (rid,)).fetchone()[0]
@@ -168,7 +172,7 @@ def morning(con):
     msg = [f"☀️ **おはようございます！** {DAY[4:6]}/{DAY[6:]}（{w}）",
            f"🏟️ 今日は **{len(venues)}開催・{len(rs)}レース**", f"　{'・'.join(venues)}"]
     if nxt:
-        msg.append(f"⏰ 最初の通知：{nxt[0]['venue']} {nxt[0]['race_no']}R（締切 {kr.ts(nxt[0]['close_at'])[11:16]} の1分半前ごろ）")
+        msg.append(f"⏰ 最初の通知：{nxt[0]['venue']} {nxt[0]['race_no']}R（締切 {kr.ts(nxt[0]['close_at'])[11:16]} の1分前ごろ）")
     repo = os.environ.get("GITHUB_REPOSITORY")
     if repo:
         msg.append(f"📂 前日までの一覧（レース・選手・全オッズ）→ https://github.com/{repo}/releases/tag/tables")

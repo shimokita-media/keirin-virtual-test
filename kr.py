@@ -472,7 +472,7 @@ def rule_picks(con, row, odds):
 def record_rule(con, row, odds, meta):
     """法則枠を締切4〜7分前に判断して記録する（通知と同じ内容）。読み戻しで一致を確認"""
     mins = (row["close_at"] - time.time()) / 60
-    if not (1.5 <= mins <= 8.0):  # 2026-11-07〜 締切2〜3分前の判断も受け付ける
+    if not (0.3 <= mins <= 8.0):  # 2026-11-10〜 締切1分前の判断も受け付ける（11-07〜09は1.5〜8分）
         return None
     picks, cond = rule_picks(con, row, odds)
     created = now().isoformat(timespec="seconds")
@@ -498,7 +498,7 @@ def record_wide(con, row, odds, meta):
     「ワイド × 倍率6〜10倍 × 3連単から見た割安度0.85以上」を全レース対象で各100円（最大5点）。
     法則枠と同じ締切4〜7分前に判断して記録し、読み戻しで一致を確認する"""
     mins = (row["close_at"] - time.time()) / 60
-    if not (1.5 <= mins <= 8.0):  # 2026-11-07〜 締切2〜3分前の判断も受け付ける
+    if not (0.3 <= mins <= 8.0):  # 2026-11-10〜 締切1分前の判断も受け付ける（11-07〜09は1.5〜8分）
         return None
     picks = [r for r in evaluate(odds) if r["bet_type"] == "ワイド" and 6 <= r["odds"] <= 10 and r["evc"] >= 0.85]
     picks.sort(key=lambda r: -r["evc"])
@@ -534,7 +534,7 @@ def record_trifecta(con, row, odds, meta):
     """3連単枠 B3T（2026-11-09〜、ユーザー依頼で追加）。tri_rule.py の「形の法則」5つ（3期間すべて100%超え）。
     締切2〜3分前の倍率で判断して各100円（最大6点）を記録し、読み戻しで一致を確認する。ワイド枠・法則枠には影響しない"""
     mins = (row["close_at"] - time.time()) / 60
-    if not (1.5 <= mins <= 8.0):
+    if not (0.3 <= mins <= 8.0):  # 2026-11-10〜 締切1分前の判断も受け付ける
         return None
     import tri_rule
     picks = tri_rule.picks(con, row, odds)
@@ -561,11 +561,46 @@ def record_trifecta(con, row, odds, meta):
     return picks
 
 
+def record_T(con, row, odds, meta):
+    """T枠 B3X（2026-11-10〜、ユーザー依頼・記録のみ・通知しない）。KNOWLEDGE ★事前登録T と同じ条件：
+    3連単 10倍以下 ×（G戦 または 9車立て）× 3着の選手の得点順位が5位以下（欠場を除く出走者の競走得点の高い順、同点は小さい順位）。各100円"""
+    mins = (row["close_at"] - time.time()) / 60
+    if not (0.3 <= mins <= 8.0):
+        return None
+    if (row["class"] or "") == "L級" or not odds.get("3連単"):
+        return []
+    G = str(row["grade"] or "").startswith("G"); nine = (row["entries_number"] or 0) >= 9
+    if not (G or nine):
+        return []
+    pts = con.execute("SELECT number, race_point FROM entries WHERE race_id=? AND absent=0", (row["race_id"],)).fetchall()
+    vals = sorted([p for _, p in pts if p is not None], reverse=True)
+    rank = {n: (1 + sum(1 for v in vals if v > p)) if p is not None else None for n, p in pts}
+    picks = []
+    for c, (o, _mx, _pop) in odds["3連単"].items():
+        if not o or o > 10:
+            continue
+        d = int(c.split("-")[2])
+        if (rank.get(d) or 0) >= 5:
+            picks.append({"combo": c, "odds": o})
+    created = now().isoformat(timespec="seconds")
+    recs = [(p["combo"], 100, p["odds"]) for p in picks] or [("", 0, None)]
+    for c, s_, o in recs:
+        sha = hashlib.sha256(f"{row['race_id']}|B3X|{created}|{c}|{s_}|{o}".encode()).hexdigest()[:16]
+        con.execute("""INSERT INTO predictions(race_id,phase,created_at,close_at,minutes_to_close,bet_type,combo,stake,
+            ref_odds,ref_source,ref_odds_fetched_at,ref_source_updated_at,model_prob,ev_a10,ev_a115,bet_rating,race_rating,reason,sha)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    (row["race_id"], "B3X", created, ts(row["close_at"]), round(mins, 1), "3連単" if s_ else "見送り", c, s_, o, meta["source"],
+                     meta["fetched_at"], meta["source_updated_at"], None, None, None, "T", "T" if picks else "C",
+                     json.dumps({"T枠": "10倍以下×(G戦か9車)×3着得点5位以下"}, ensure_ascii=False), sha))
+    con.commit()
+    return picks
+
+
 def record_best(con, row, odds, meta, tri):
     """🏆最強枠 B3S（2026-11-09〜、ユーザー依頼・記録のみ）。3連単枠の一番の目の出走表の点数が3以上のときだけ、
     一番の目の3連単（点数5=500円・3〜4=100円）＋同じ3人の3連複（100円）を記録。読み戻しで一致を確認する"""
     mins = (row["close_at"] - time.time()) / 60
-    if not (1.5 <= mins <= 8.0):
+    if not (0.3 <= mins <= 8.0):  # 2026-11-10〜 締切1分前の判断も受け付ける
         return None
     import tri_rule
     top = next((p for p in (tri or []) if p.get("top")), None)
@@ -596,7 +631,7 @@ def record_watch(con, row, odds, meta):
     """様子見の2枠 B3A（ワイドA）・B3K（形のワイド）（2026-11-09〜、ユーザー依頼）。通知はせず記録だけ。
     締切2〜3分前の倍率で判断して各100円（最大5点）を記録し、読み戻しで一致を確認する"""
     mins = (row["close_at"] - time.time()) / 60
-    if not (1.5 <= mins <= 8.0):
+    if not (0.3 <= mins <= 8.0):  # 2026-11-10〜 締切1分前の判断も受け付ける
         return None
     import wide_rule
     res = wide_rule.picks(con, row, odds)
