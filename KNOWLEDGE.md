@@ -1110,3 +1110,4 @@
   1. `python -I -X utf8 research/prereg_full_2024.py 20221108 20231107 20230507 y4 --no-check`
   2. `ANGLE_CACHE=out/y4/cache.pkl SIDE_SUFFIX=_y4 python -I -X utf8 research/x_predict_period.py out/y4/xpred.pkl`（out/v1_tend.pkl が無ければ先に `python -I -X utf8 research/v1_tend_table.py x`）
   3. `python -I -X utf8 research/prereg_eval_y4.py out/y4/cache.pkl _y4 out/y4/zpred.pkl 20221108 20231107 20230507 reports/prereg_y4.md out/y4/xpred.pkl`（U・V・W・X・Z を BH補正つきで判定）
+- 0:20 **訂正（考え方の整理）**：車券はパリミュチュエル方式なので、払戻はいつ買っても**最終オッズ**で決まる。「最後の1分で買われる目を1分前に予測して、1分前の高い倍率で買えば得」という言い方は誤り（1分前に買っても受け取るのは縮んだ最終オッズ）。最後の1分の予測が役に立つとすれば「当たりやすい目を選べる（選び方が良くなる）」ことだけ。最終オッズで学んだ機械の成績が1分前に出にくいのも同じ理由：最終オッズの特徴量（他券種とのズレなど）には最後の1分の情報が入っていて、1分前の特徴量ではその目を選べない。払戻の倍率そのものは同じ
