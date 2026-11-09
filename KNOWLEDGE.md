@@ -1067,3 +1067,8 @@
 - **research/prereg_full_2024.py**：事前登録 R・S・T・Y・Z の判定を一発で（①取り込みの完了確認 → ②選手表・3連単の表〔research/ana_build_small.py・tri3_build_small.py＝150/100レースずつ・1秒休みの小分け読み込み〕→ ③side〔angle_side2.py〕→ ④angle_base 形式の表〔build_cache_period.py〕→ ⑤機械 v2・D の予測〔z_predict_period.py、学習はしない〕→ ⑥判定〔prereg_eval_full.py、登録どおりの基準で合否まで出す〕）。できた分は飛ばすので止まってもやり直せる。11/10 18:00 の予約はこれを呼ぶ形に変更（Z も判定に入った）
 - **research/daily_forward.py**：本番DBをダウンロードし、締切1分前の表を 11/7〜最新で作り直して、Z の前向き確認（z_forward）と1分前の分析（preclose_1min）を一発で更新（ローカルの取り込み中DBには触らない）
 - 試運転：2024/2/1〜9/8（名前 y2024b、--no-check）で実行中
+
+## 2026-11-10 0:00 機械のファイルが壊れかけた件／前向きの確認の更新
+- **事故**：git の改行の自動変換（core.autocrlf=true）で、機械Dのファイル（research/meta_model_v3cv_0〜2.txt）が pull --rebase のときに CRLF に書き換えられ、LightGBM が読めずに Python ごと落ちた（daily_forward の z_forward）。→ .gitattributes に `research/*.txt -text` を追加し、3つを LF に戻して読み込みを確認（v2・v2full・D すべて OK）。判定の試運転（y2024b）が機械を読む前に直せた
+- 前向きの確認（daily_forward → reports/z_forward.md・preclose_1min.md、本番DB 11/7〜9・204〜228R）：Z（D）18点・18%、Z（v2full）15点・22%（どちらも当たり1本、見込みの当たり数は約2.7本＝まだ運の範囲）。一番の目（1分前）14点・258%、3連単枠（1分前）27点・170%、T（1分前）7点・297%
+- 気づき：1分前の倍率で動かすと Z の点数は最終オッズのときの約半分（1レースあたり0.09点 対 2024年の最終オッズで0.20点）。1分前は人気どころの倍率が最終より少し低い（最終で+2%）ので、期待値が低めに出て条件を満たしにくい。期待値の区切りを1分前用に少し下げる（0.9→0.88など）かどうかは、記録がたまってから決める（今は変えない）
