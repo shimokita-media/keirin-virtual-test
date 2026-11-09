@@ -27,6 +27,8 @@ SNAPSHOTS = {"T10": (9.0, 11.0), "T5": (4.5, 5.8), "T1": (0.4, 1.5)}  # 記録�
 DECIDE_WINDOW = (0.75, 1.5)  # 2026-11-10〜 締切1分前ごろに判断（ユーザー希望：目減り約-3%）。11-07〜11-09 は2〜3分前、それまでは4〜7分前
 NOTIFY_RULE = False  # 2026-11-07〜 法則枠は通知せず記録のみ。Discord の買い目・結果はワイド枠だけ
 ONLY_RULE = True  # 2026-11-06〜 法則枠(B1R)のみ記録（B0/B1・検証買い・万車券枠は停止。結果回収は継続）
+COMMENT_WINDOW = (2.0, 30.0)  # 2026-11-10〜 netkeirin の選手コメントを取る時間帯（締切まで何分）。判断の窓（1分前ごろ）とは重ねない
+NK_TRIES = {}  # レースごとの選手コメント取得の回数（同じレースを何度も取りに行かないため）
 B0_TARGET = 45   # 締切まで45分以下(30分以上)になった最初のループで B0
 B1_WINDOW = (1.0, 4.0)  # 締切まで1〜4分で B1
 
@@ -54,6 +56,7 @@ def tick(con, done_results):
     t = time.time()
     pre = [r for r in rs if r["close_at"] > t]
     post = [r for r in rs if r["close_at"] <= t - 480 and r["race_id"] not in done_results][:3]
+    nk_left = 1  # netkeirin の選手コメントの取得は1ループ1件まで（判断の時刻を遅らせないため）
     for r in pre + post:
         rid, mins = r["race_id"], (r["close_at"] - time.time()) / 60
         try:
@@ -63,6 +66,16 @@ def tick(con, done_results):
                         "SELECT 1 FROM odds WHERE race_id=? AND phase=? AND source='winticket' LIMIT 1", (rid, ph)).fetchone():
                     kr.fetch_race(con, r, ph)
                     mins = (r["close_at"] - time.time()) / 60
+            # 選手コメント（netkeirin の出走表。決勝などでは前のレース後の談話が入る。2026-11-10〜、ユーザー依頼）：締切2〜30分前に1回（失敗したらもう1回まで）
+            if nk_left and COMMENT_WINDOW[0] <= mins <= COMMENT_WINDOW[1] and NK_TRIES.get(rid, 0) < 2 and not con.execute(
+                    "SELECT 1 FROM rider_comments WHERE race_id=? AND source='netkeirin' LIMIT 1", (rid,)).fetchone():
+                nk_left -= 1
+                NK_TRIES[rid] = NK_TRIES.get(rid, 0) + 1
+                try:
+                    kr.fetch_nk_comments(con, r)
+                except Exception:
+                    say("ERR comments", rid, traceback.format_exc()[-200:])
+                mins = (r["close_at"] - time.time()) / 60
             if not ONLY_RULE and 30 <= mins <= B0_TARGET and not has(con, rid, "B0"):
                 rd, odds, meta = kr.fetch_race(con, r, "B0")
                 nk, _ = kr.fetch_nk_odds(con, r, "B0")

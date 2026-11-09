@@ -80,6 +80,12 @@ def db():
       BEGIN SELECT RAISE(ABORT, 'predictions is append-only'); END;
     CREATE TABLE IF NOT EXISTS race_weather(race_id TEXT PRIMARY KEY, weather INT, temperature REAL, wind_speed REAL,
       wind_direction INT, precipitation REAL, target_at INT, race_weather TEXT, race_wind REAL, fetched_at TEXT);
+    -- 2026-11-10〜 前検日インタビュー（WINTICKET。1つの開催で1人1回）と、netkeirin の出走表の選手コメント
+    CREATE TABLE IF NOT EXISTS interviews(cup_id TEXT, player_id TEXT, kind TEXT, race_id TEXT, schedule_id TEXT,
+      qa_json TEXT, interviewer_type INT, interview_type INT, list_created_at INT, list_updated_at INT, fetched_at TEXT,
+      PRIMARY KEY(cup_id, player_id, kind));
+    CREATE TABLE IF NOT EXISTS rider_comments(race_id TEXT, number INT, player_id TEXT, source TEXT, comment TEXT,
+      fetched_at TEXT, PRIMARY KEY(race_id, number, source));
     CREATE TABLE IF NOT EXISTS results(race_id TEXT, rank INT, number INT, player_id TEXT, factor TEXT,
       margin TEXT, fetched_at TEXT, PRIMARY KEY(race_id, rank, number));
     CREATE TABLE IF NOT EXISTS payouts(race_id TEXT, bet_type TEXT, combo TEXT, payout INT, popularity INT,
@@ -162,6 +168,29 @@ def race_url(row):
     return f"https://www.winticket.jp/keirin/{row['slug']}/racecard/{row['cup_id']}/{row['day_index']}/{row['race_no']}"
 
 
+def save_interviews(con, q, rid, t, cup_id=None):
+    """前検日インタビュー（レースページに載っている、そのレースの選手の分）を interviews に保存する。
+    1つの開催で1人1行（cup_id・player_id）。中身（threads＝質問と答え）のない選手は保存しない。
+    同じ中身なら書き換えない（fetched_at＝最初に取れた時刻が残る）。WINTICKET に残っているのは 2025年末〜2026年初めごろ以降の開催だけ。
+    戻り値: 新しく保存・更新した人数"""
+    iv = q.get("FETCH_KEIRIN_INSPECTION_DAY_INTERVIEW_LIST") or {}
+    n = 0
+    for it in iv.get("interviews") or []:
+        th = it.get("threads") or []
+        if not th or not it.get("playerId"):
+            continue
+        cur = con.execute("""INSERT INTO interviews VALUES(?,?,?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(cup_id, player_id, kind) DO UPDATE SET qa_json=excluded.qa_json,
+              interviewer_type=excluded.interviewer_type, interview_type=excluded.interview_type,
+              list_updated_at=excluded.list_updated_at
+            WHERE excluded.qa_json != interviews.qa_json""",
+                          (iv.get("cupId") or cup_id, it["playerId"], "前検", rid, iv.get("scheduleId"),
+                           json.dumps(th, ensure_ascii=False), it.get("interviewerType"), it.get("interviewType"),
+                           iv.get("createdAt"), iv.get("updatedAt"), t))
+        n += max(cur.rowcount, 0)
+    return n
+
+
 def fetch_race(con, row, phase=""):
     """出走表・並び・オッズ・結果を1リクエストで取得。戻り値: (race_data, odds_dict, odds_meta)"""
     url = race_url(row)
@@ -203,6 +232,11 @@ def fetch_race(con, row, phase=""):
         con.execute("INSERT OR REPLACE INTO race_weather VALUES(?,?,?,?,?,?,?,?,?,?)",
                     (rid, w.get("weather"), num(w.get("temperature")), num(w.get("windSpeed")), w.get("windDirection"),
                      num(w.get("precipitation")), w.get("targetAt"), rr.get("weather"), num(rr.get("windSpeed")), t))
+    except Exception:
+        pass
+    # 前検日インタビュー（2026-11-10 追加、ユーザー依頼。保存に失敗しても本体の取り込みは止めない）
+    try:
+        save_interviews(con, q, rid, t, row["cup_id"])
     except Exception:
         pass
     # オッズ
@@ -276,6 +310,55 @@ def fetch_nk_odds(con, row, phase=""):
     con.commit()
     log(con, "netkeirin", url, rid, 1, n, f"{nk_id} last_dt={upd}")
     return odds, {"source": "netkeirin", "fetched_at": t, "source_updated_at": str(upd)}
+
+
+def nk_race_id(row):
+    return f"{row['date']}{int(row['venue_id']):02d}{int(row['race_no']):02d}"
+
+
+def fetch_nk_comments(con, row):
+    """netkeirin の出走表ページ（robots.txt 全許可）の「選手コメント」を rider_comments に保存する（2026-11-10 追加、ユーザー依頼）。
+    多くのレースは作戦だけ（「自力。」「〇〇君。」＝WINTICKET の entries.comment とほぼ同じ）だが、決勝など一部のレースでは
+    前のレースのあとの談話（「体調も戻り、初日よりも軽かったですね。自力でいく。」など）が入る。
+    最初に取れた文を残す（上書きしない。後で短い作戦だけに差し替わることがあるため）。戻り値: 新しく保存した人数（取得失敗は None）"""
+    from bs4 import BeautifulSoup
+    rid = row["race_id"]
+    nk = nk_race_id(row)
+    url = f"https://keirin.netkeiba.com/race/entry/?race_id={nk}"
+    try:
+        r = _get("nk", lambda: requests.get(url, headers=UA, timeout=20))
+        r.raise_for_status()
+        r.encoding = "utf-8"
+        soup = BeautifulSoup(r.text, "lxml")
+    except Exception as e:
+        log(con, "netkeirin", url, rid, 0, 0, f"comments {nk} {e!r}")
+        return None
+    t = now().isoformat(timespec="seconds")
+    n = 0
+    for tr in soup.select("tr.PlayerList"):
+        a = tr.select_one("a.Player01[id^=names_]")  # 例: id="names_14089_202611084812"（14089 → WINTICKET の '014089'）
+        c = tr.select_one("td.Txt_L")
+        if a is None or c is None:
+            continue
+        parts = a.get("id", "").split("_")
+        pid = parts[1].zfill(6) if len(parts) >= 3 and parts[1].isdigit() else None
+        num = None
+        for td in tr.find_all("td"):  # 車番のマス（class="RaceCardCell01 Waku{車番}"）
+            if any(cl.startswith("Waku") and cl[4:].isdigit() for cl in td.get("class") or []):
+                s = td.get_text(strip=True)
+                num = int(s) if s.isdigit() else None
+                break
+        if num is None and pid:
+            x = con.execute("SELECT number FROM entries WHERE race_id=? AND player_id=?", (rid, pid)).fetchone()
+            num = x[0] if x else None
+        if num is None:
+            continue
+        cur = con.execute("INSERT OR IGNORE INTO rider_comments VALUES(?,?,?,?,?,?)",
+                          (rid, num, pid, "netkeirin", c.get_text(" ", strip=True), t))
+        n += max(cur.rowcount, 0)
+    con.commit()
+    log(con, "netkeirin", url, rid, 1, n, f"comments {nk}")
+    return n
 
 
 # ---------------------------------------------------------------- 確率モデル（券種間整合）
