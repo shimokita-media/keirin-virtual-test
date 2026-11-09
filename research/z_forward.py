@@ -1,4 +1,4 @@
-"""事前登録Z の前向き確認：締切1分前の倍率で v2full を動かし、確定の払戻で精算（ANGLE_CACHE=out/angle_base_t1.pkl で実行）。以下は v2 の説明。v2（2026-11-09 17:35〜）：v1 と同じ特徴量づくり＋選手の癖を「1着」「3着以内」に分け、縮小を強め、設定とレース内の正規化を比べる。
+"""事前登録Z の前向き確認：締切1分前の倍率で機械 D（3つの平均）と v2full を動かし、確定の払戻で精算（ANGLE_CACHE=out/angle_base_t1.pkl で実行）。以下は v2 の説明。v2（2026-11-09 17:35〜）：v1 と同じ特徴量づくり＋選手の癖を「1着」「3着以内」に分け、縮小を強め、設定とレース内の正規化を比べる。
 案の選択は止めどころ期間（26/6/16〜8/31）の対数損失だけで行い、③⑥は選んだ案を最後に1回だけ見る。
 --- 以下 v1 の説明 ---
 意味のある学習（2026-11-09 17:20〜）：今日見つけた歪みを全部「特徴量」にまとめ、市場の見込みを出発点にして1つの機械に学ばせる。
@@ -90,7 +90,11 @@ p_ = per(T.date); tr = (p_ == "探す") & (T.date <= TR_END); va = (p_ == "探�
 
 NL = chr(10)
 mo = lgb.Booster(model_file=K + "research/meta_model_v2full.txt")
-T["p"] = 1 / (1 + np.exp(-(mo.predict(T[mo.feature_name()], raw_score=True) + T.init.to_numpy())))
+T["p_full"] = 1 / (1 + np.exp(-(mo.predict(T[mo.feature_name()], raw_score=True) + T.init.to_numpy())))
+# D：3つの機械の平均（2026-11-09 23:20 採用、ユーザー了承）。生の出力を平均してから確率にする
+ens = [lgb.Booster(model_file=K + f"research/meta_model_v3cv_{i}.txt") for i in range(3)]
+T["p_D"] = 1 / (1 + np.exp(-(np.mean([b.predict(T[b.feature_name()], raw_score=True) for b in ens], axis=0) + T.init.to_numpy())))
+T["p"] = T.p_D  # これから使う機械は D
 T["ev"] = T.p * T.odds
 FIN = pd.read_pickle(K + "out/fresh8/tri.pkl")[["race_id", "combo", "odds"]].rename(columns={"odds": "fin"}) if False else None
 import sqlite3
@@ -103,9 +107,9 @@ def cell(x):
     by = x.groupby("race_id").ret.agg(["sum", "size"]); w = rng.dirichlet(np.ones(len(by)), 3000); post = (w @ by["sum"].to_numpy()) / (w @ by["size"].to_numpy())
     return f"**{x.ret.mean():.0%}**（{len(x)}点・{x.race_id.nunique()}R・的中{(x.ret > 0).mean():.0%}・倍率の動き（1分前→最終）{(x.fin / x.odds).median() - 1:+.1%}・P>100% {(post > 1).mean():.0%}）"
 P("# 事前登録Z を締切1分前の倍率で動かしたら（本番の記録・11/7〜）" + NL)
-P(f"機械 v2full、特徴量は1分前の倍率から作成、精算は確定の払戻。{T.date.min()}〜{T.date.max()}・{T.race_id.nunique()}R。" + NL)
+P(f"機械 D（3つの機械の平均、2026/11/8まで学習）。参考に v2full も並べる。特徴量は1分前の倍率から作成、精算は確定の払戻。{T.date.min()}〜{T.date.max()}・{T.race_id.nunique()}R。" + NL)
 P("| 選び方 | 1分前で選んだ成績 |" + NL + "|---|---|")
-for nm, m in (("★Z 当たる確率≥10%×期待値≥0.9", (T.p >= 0.10) & (T.ev >= 0.9)), ("当たる確率≥15%×期待値≥0.9", (T.p >= 0.15) & (T.ev >= 0.9)),
+for nm, m in (("★Z（v2full）当たる確率≥10%×期待値≥0.9", (T.p_full >= 0.10) & (T.p_full * T.odds >= 0.9)), ("★Z（D）当たる確率≥10%×期待値≥0.9", (T.p >= 0.10) & (T.ev >= 0.9)), ("当たる確率≥15%×期待値≥0.9", (T.p >= 0.15) & (T.ev >= 0.9)),
               ("期待値≥1.1", T.ev >= 1.1), ("一番の目（1分前）", T.is_top), ("3連単を全部（1分前の300倍以下）", T.odds > 0)):
     P(f"| {nm} | {cell(T[m])} |")
 P(NL + "日ごとの Z：" + ", ".join(f"{d} {x.ret.mean():.0%}（{len(x)}点）" for d, x in T[(T.p >= 0.10) & (T.ev >= 0.9)].groupby("date")))
