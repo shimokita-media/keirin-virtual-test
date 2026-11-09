@@ -5,7 +5,7 @@ import os, sqlite3, numpy as np, pandas as pd
 from scipy.stats import norm
 K = "C:/Users/take0/.claude/keirin/"
 SP = "C:/Users/take0/AppData/Local/Temp/claude/a37ab707dae15896/7b6bdcb5-d7a9-44e7-8208-87d25e059855/scratchpad/"
-CACHE = K + "out/angle_base.pkl"
+CACHE = os.environ.get("ANGLE_CACHE", K + "out/angle_base.pkl")
 exec(open(K + "research/tri_live.py", encoding="utf-8").read().split("def rules")[0])
 if os.path.exists(CACHE):
     T = pd.read_pickle(CACHE)
