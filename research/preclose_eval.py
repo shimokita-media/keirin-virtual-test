@@ -11,7 +11,7 @@ HERE = os.path.dirname(os.path.abspath(__file__)); BASE = os.path.dirname(HERE)
 sys.path.insert(0, BASE)
 import kr, tri_rule, wide_rule
 START = "20261106"
-FRAMES = {"B3S": "🏆最強枠：一番の目×点数3以上（3連単 5点500円・3〜4点100円＋3連複100円）", "B1W": "🎯ワイド枠（通知中）", "B3T": "🎰3連単枠（通知中・11/9〜記録）", "B3T1": "⭐3連単枠の一番の目1点（選び直しで確認）", "B3TB": "⭐一番の目×ラインの先頭のB（バック回数）がレースで一番多い（選び直しで確認）", "B3TS": "⭐一番の目×出走表の点数3以上（選び直しで確認）", "B3K": "👀形のワイド（記録のみ・11/9〜）", "B3A": "👀ワイドA（記録のみ・11/9〜）", "B1R": "📐法則枠（記録のみ）"}
+FRAMES = {"B3S": "🏆最強枠：一番の目×点数3以上（3連単 5点500円・3〜4点100円＋3連複100円）", "B1W": "🎯ワイド枠（通知中）", "B3T": "🎰3連単枠（通知中・11/9〜記録）", "B3T1": "⭐3連単枠の一番の目1点（選び直しで確認）", "B3TB": "⭐一番の目×ラインの先頭のB（バック回数）がレースで一番多い（選び直しで確認）", "B3TS": "⭐一番の目×出走表の点数3以上（選び直しで確認）", "B3K": "👀形のワイド（記録のみ・11/9〜）", "B3A": "👀ワイドA（記録のみ・11/9〜）", "B3A12": "👀ワイドA×割安度1.2以上（事前登録P・選び直しで確認）", "B3A14": "👀ワイドA×割安度1.4以上（事前登録P・選び直しで確認）", "B1R": "📐法則枠（記録のみ）"}
 
 
 from tri_rule import card_score  # 点数の計算は tri_rule.py に一本化（2026-11-09）
@@ -43,6 +43,8 @@ def pick_all(con, row, od):
             out["B3S"] = [("3連単", cb, o, _tr.stake_hint(sc)), ("3連複", trio, (od.get("3連複", {}).get(trio) or (None,))[0], 100)]
     wr = wide_rule.picks(con, row, od)
     out["B3A"] = [("ワイド", r["combo"], r["odds"]) for r in wr["B3A"]]
+    out["B3A12"] = [("ワイド", r["combo"], r["odds"]) for r in wr["B3A"] if r["ev"] >= 1.2]  # 事前登録P（2026-11-09）：選んだ時点の割安度で分ける
+    out["B3A14"] = [("ワイド", r["combo"], r["odds"]) for r in wr["B3A"] if r["ev"] >= 1.4]
     out["B3K"] = [("ワイド", r["combo"], r["odds"]) for r in wr["B3K"]]
     return out
 
