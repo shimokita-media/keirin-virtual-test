@@ -42,3 +42,25 @@ def summ(g):
     return out
 def fmt(s):
     return " / ".join(f"{s[k][1]:.0%}({s[k][0]})" if s[k][0] else "−" for k in ("探す", "③", "⑥"))
+def combo_parts(D):
+    """3連単の組番を 1着・2着・3着の車番に分ける"""
+    p = D.combo.str.split("-", expand=True).astype(int); return p[0], p[1], p[2]
+def report(path, title, note, conds, D=None):
+    """conds: {条件名: T と同じ index の真偽 Series}。全部・30倍以下・3連単枠・一番の目 の表と候補を path に書く"""
+    D = T if D is None else D
+    Bx, tx = D[D.in_B], D[D.is_top]
+    rows = []
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(f"# 切り口：{title}\n\n{note}\n\n回収率（点数）は 探す / ③ / ⑥。最終オッズ・各100円。\n\n")
+        f.write("| 条件 | 3連単全部 | 30倍以下 | 3連単枠 | 一番の目 |\n|---|---|---|---|---|\n")
+        for nm, m in conds.items():
+            m = m.reindex(D.index, fill_value=False).astype(bool)
+            gs = [D[m], D[m & (D.odds <= 30)], Bx[m[Bx.index]], tx[m[tx.index]]]
+            f.write(f"| {nm} | " + " | ".join(fmt(summ(g)) for g in gs) + " |\n")
+            for lab, g in zip(("全部", "30倍以下", "3連単枠", "一番の目"), gs): rows.append((nm, lab, summ(g)))
+        ok = lambda s: all((s[k][0] or 0) >= 30 and s[k][1] > 1 for k in ("探す", "③", "⑥"))
+        c = [(a, b, s) for a, b, s in rows if ok(s) and s["探す"][2] >= 2.5]
+        f.write("\n## 候補（探す t≥2.5 かつ 3期間とも100%超・各30点以上）\n" + ("\n".join(f"- {a} × {b}: {fmt(s)}（t={s['探す'][2]:.1f}）" for a, b, s in c) or "- なし") + "\n")
+        c2 = [(a, b, s) for a, b, s in rows if ok(s)]
+        f.write("\n## 参考：3期間とも100%超（tは問わない）\n" + ("\n".join(f"- {a} × {b}: {fmt(s)}（t={s['探す'][2]:.1f}）" for a, b, s in c2) or "- なし") + "\n")
+    return c, c2
