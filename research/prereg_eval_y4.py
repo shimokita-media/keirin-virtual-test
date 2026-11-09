@@ -1,10 +1,11 @@
 """y4（2022/11/08〜2023/11/07）での事前登録 U・V・W・Z の判定（KNOWLEDGE.md の登録どおり。結果を見てから変えない）。BH補正つき。
-X（機械v1×期待値≥1.0）は v1 の「選手の癖」の表（2025/2〜2026/6/15 で作ったもの）が必要なので、別に用意してから判定する（ここでは未判定と表示）。
-使い方: python -I -X utf8 research/prereg_eval_y4.py 表.pkl sideの接尾辞 予測.pkl 開始日 終了日 前半の最終日 出力.md
+X（機械v1×期待値≥1.0）は research/x_predict_period.py の予測（v1 の選手の癖は out/v1_tend.pkl＝2025/2〜2026/6/15 で作った表。v1 の予測を完全に再現できることを確認済み）を9番目の引数で渡すと判定する。
+使い方: python -I -X utf8 research/prereg_eval_y4.py 表.pkl sideの接尾辞 予測.pkl 開始日 終了日 前半の最終日 出力.md [v1の予測.pkl]
 （表・予測は research/prereg_full_2024.py で作る：... 20221108 20231107 20230507 y4 --no-check）"""
 import sys, numpy as np, pandas as pd
 K = "C:/Users/take0/.claude/keirin/"
 fT, suf, fZ, d0, d1, half, outp = sys.argv[1:8]
+fX = sys.argv[8] if len(sys.argv) > 8 else None
 P_ = lambda f: f if f.startswith(("C:", "/")) else K + f
 OUT = open(P_(outp), "w", encoding="utf-8"); NL = chr(10)
 def P(*a): print(*a, file=OUT, flush=True)
@@ -33,6 +34,11 @@ res = {"U 一番の目×級班2種類以上": (st(U), lambda s: s["roi"] > (U_re
        "V 一番の目×最終日の前日（3日制以上）": (st(V), lambda s: (V_noS.ret.mean() if len(V_noS) else 0) > 1.0),
        "W 一番の目×400mバンク": (st(W), lambda s: s["roi"] > (W_333.ret.mean() if len(W_333) else 9)),
        "Z 機械v2：当たる確率≥10%×期待値≥0.9": (st(Zg), lambda s: s["hit"] >= 0.15)}
+if fX:
+    XP = pd.read_pickle(P_(fX)); XP = XP[XP.date.between(d0, d1) & XP.is_top]
+    Xg, X_rest = XP[XP.p_v1 * XP.odds >= 1.0], XP[XP.p_v1 * XP.odds < 1.0]
+    res["X 一番の目×機械v1の期待値≥1.0"] = (st(Xg), lambda s: s["roi"] > (X_rest.ret.mean() if len(X_rest) else 9))
+X_NOHALF = "X 一番の目×機械v1の期待値≥1.0"  # X の登録は「下限95%以上」と「期待値<1.0 の一番の目より高い」（前半後半の条件はない）
 # BH補正（片側：本当の回収率≦100% という仮説の p値＝ブートストラップで 100% 以下になる割合）。X を後で足すときは m=5 にする
 names = [k for k in res if res[k][0] is not None]; pv = np.array([res[k][0]["p"] for k in names]); m = 5  # U・V・W・X・Z の5つで補正（X 未判定でも数に入れる＝厳しめ）
 order = np.argsort(pv); bh_ok = np.zeros(len(names), bool)
@@ -40,11 +46,11 @@ kmax = max([i + 1 for i, j in enumerate(order) if pv[j] <= 0.05 * (i + 1) / m], 
 for i, j in enumerate(order):
     if i < kmax: bh_ok[j] = True
 P(f"# y4 での事前登録 U・V・W・Z の判定（{d0}〜{d1}・前半〜{half}）" + NL)
-P(f"{T.date.nunique()}日・{T.race_id.nunique():,}R。最終オッズ・確定の払戻・各100円。合格＝登録の基準（95%の範囲の下限95%以上・前半後半とも100%超・それぞれの追加条件）を満たし、かつ BH補正（U・V・W・X・Z の5つ、q=0.05）で有意。X は未判定。" + NL)
+P(f"{T.date.nunique()}日・{T.race_id.nunique():,}R。最終オッズ・確定の払戻・各100円。合格＝登録の基準（95%の範囲の下限95%以上・前半後半とも100%超・それぞれの追加条件）を満たし、かつ BH補正（U・V・W・X・Z の5つ、q=0.05）で有意。X は v1 の予測を渡したときだけ判定（渡さないと未判定のまま、補正の数には入れる）。" + NL)
 P("| 登録 | 判定 | 回収率 | 点数・当たり | 95%の範囲 | 前半 / 後半 | 追加条件 | p値（BH） |" + NL + "|---|---|---|---|---|---|---|---|")
 for i, k in enumerate(names):
-    s, extra = res[k]; ex = bool(extra(s)); base_ok = s["lo"] >= 0.95 and s["h1"] > 1 and s["h2"] > 1
+    s, extra = res[k]; ex = bool(extra(s)); base_ok = s["lo"] >= 0.95 and (k == X_NOHALF or (s["h1"] > 1 and s["h2"] > 1))
     P(f"| {k} | {'**合格**' if (base_ok and ex and bh_ok[i]) else '不合格'} | **{s['roi']:.0%}** | {s['n']}点・{s['hits']}本（的中{s['hit']:.0%}） | {s['lo']:.0%}〜{s['hi']:.0%} | {s['h1']:.0%} / {s['h2']:.0%} | {'満たす' if ex else '満たさない'} | {s['p']:.3f}（{'有意' if bh_ok[i] else '有意でない'}） |")
 P(NL + f"参考：一番の目 全部 {top.ret.mean():.0%}（{len(top)}点）／級班1種類 {U_rest.ret.mean() if len(U_rest) else float('nan'):.0%}／最終日の前日から準決勝を除く {V_noS.ret.mean() if len(V_noS) else float('nan'):.0%}／333m系 {W_333.ret.mean() if len(W_333) else float('nan'):.0%}／3連単全部 {T.ret.mean():.0%}")
-P("| X 機械v1×期待値≥1.0 | 未判定 | v1 の選手の癖の表（2025/2〜2026/6/15）を作ってから判定する |")
+if not fX: P("| X 一番の目×機械v1×期待値≥1.0 | 未判定 | v1 の予測（research/x_predict_period.py）を9番目の引数で渡すと判定する |")
 print("done", outp)

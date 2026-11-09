@@ -1106,3 +1106,7 @@
   1. `python -I -X utf8 research/prereg_full_2024.py 20221108 20231107 20230507 y4 --no-check`（表と予測を作る。ついでに R・S・T・Y・Z の y4 での成績も出る）
   2. `python -I -X utf8 research/prereg_eval_y4.py out/y4/cache.pkl _y4 out/y4/zpred.pkl 20221108 20231107 20230507 reports/prereg_y4.md`
 - X（機械v1×期待値≥1.0）は v1 の「選手の癖」（2025/2〜2026/6/15 で作った表）が要るので別に用意する
+- 0:15 追記：**X も判定できるようにした**。research/v1_tend_table.py で v1 の「選手の癖」の表（out/v1_tend.pkl、2,291人）を v1 と同じ材料・計算で作り直し、research/x_predict_period.py で期間を問わず v1 の予測を出す（その期間の結果は使わない）。v1 を作ったときの予測と **289.9万点すべて完全一致（差0）** を確認。y4 の手順は：
+  1. `python -I -X utf8 research/prereg_full_2024.py 20221108 20231107 20230507 y4 --no-check`
+  2. `ANGLE_CACHE=out/y4/cache.pkl SIDE_SUFFIX=_y4 python -I -X utf8 research/x_predict_period.py out/y4/xpred.pkl`（out/v1_tend.pkl が無ければ先に `python -I -X utf8 research/v1_tend_table.py x`）
+  3. `python -I -X utf8 research/prereg_eval_y4.py out/y4/cache.pkl _y4 out/y4/zpred.pkl 20221108 20231107 20230507 reports/prereg_y4.md out/y4/xpred.pkl`（U・V・W・X・Z を BH補正つきで判定）
