@@ -45,7 +45,7 @@ E["NEG"] = (E.neg >= 1) & (E.neg > E.pos)
 X = T.assign(n=T.combo.str.split("-")).explode("n"); X["number"] = X.n.astype(int)
 q = X.groupby(["race_id", "number"]).p.sum().rename("q").reset_index()
 s = T.groupby("race_id").p.sum().rename("ps")
-E = E.merge(q, on=["race_id", "number"]); E["q"] = E.q / E.race_id.map(s) * 3  # 300倍以下の組だけで足しているので、3着以内の合計が3になるようにそろえる
+E = E.merge(q, on=["race_id", "number"]); E["q"] = E.q / E.race_id.map(s)  # 300倍以下の組だけで足しているので、3着以内の合計が3になるようにそろえる（各組は3人に数えるので p の合計で割るだけで合計3。11/10 7:40 に「*3」の重複を直した＝基準は変えていない）
 E["y"] = [int((r, n) in top3) for r, n in zip(E.race_id, E.number)]
 E["res"] = E.y - E.q
 def per(d):
