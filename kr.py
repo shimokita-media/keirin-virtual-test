@@ -78,6 +78,8 @@ def db():
       BEGIN SELECT RAISE(ABORT, 'predictions is append-only'); END;
     CREATE TRIGGER IF NOT EXISTS pred_no_delete BEFORE DELETE ON predictions
       BEGIN SELECT RAISE(ABORT, 'predictions is append-only'); END;
+    CREATE TABLE IF NOT EXISTS race_weather(race_id TEXT PRIMARY KEY, weather INT, temperature REAL, wind_speed REAL,
+      wind_direction INT, precipitation REAL, target_at INT, race_weather TEXT, race_wind REAL, fetched_at TEXT);
     CREATE TABLE IF NOT EXISTS results(race_id TEXT, rank INT, number INT, player_id TEXT, factor TEXT,
       margin TEXT, fetched_at TEXT, PRIMARY KEY(race_id, rank, number));
     CREATE TABLE IF NOT EXISTS payouts(race_id TEXT, bet_type TEXT, combo TEXT, payout INT, popularity INT,
@@ -193,6 +195,16 @@ def fetch_race(con, row, phase=""):
     con.execute("UPDATE races SET line_type=?, line_json=?, status=?, updated_at=? WHERE race_id=?",
                 (lp.get("lineType"), json.dumps(lp.get("lines", []), ensure_ascii=False),
                  rd["race"]["status"], t, rid))
+    # 天気（2026-11-09 追加。保存に失敗しても本体の取り込みは止めない）
+    try:
+        w = q.get("FETCH_KEIRIN_RACE_WEATHER") or {}
+        rr = rd.get("race") or {}
+        num = lambda v: float(v) if v not in (None, "") else None
+        con.execute("INSERT OR REPLACE INTO race_weather VALUES(?,?,?,?,?,?,?,?,?,?)",
+                    (rid, w.get("weather"), num(w.get("temperature")), num(w.get("windSpeed")), w.get("windDirection"),
+                     num(w.get("precipitation")), w.get("targetAt"), rr.get("weather"), num(rr.get("windSpeed")), t))
+    except Exception:
+        pass
     # オッズ
     odds = {bt: {} for bt in BET_TYPES}
     src_upd = ts(od.get("oddsUpdatedAt"))
