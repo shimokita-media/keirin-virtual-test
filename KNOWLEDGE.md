@@ -1046,3 +1046,8 @@
   | 10倍以下×期待値≥1.0 | 90% | 89% |
 - Z は 2024年でも100%超え（v2full で P>100% 91%）。的中率を上げる（15%・20%）と100%前後に下がる。期待値≥1.1（大穴寄り）は v2 で135%と強いが的中2%でぶれが大きい
 - 本番で使うなら v2full（最新まで学習）。正式な Z の判定は 2023/11〜2025/1 がそろってから（y3 の取り込み後、side と表を広げる）
+
+## 2026-11-09 22:00 事前登録Z の前向き確認の仕組み（research/build_t1.py・research/z_forward.py → reports/z_forward.md）
+- 本番DBのコピーから締切1分前（T1）の倍率で表を作り（KPH=T1 で ana_build・tri3_build → out/live_t1 → build_t1.py → out/angle_base_t1.pkl）、v2full の特徴量も1分前の倍率から作って Z を選び、確定の払戻で精算
+- 11/7〜9（178R）：Z は14点・当たり1本・24%（点数が少なすぎて判断不可）。1分前→最終の倍率の動きは +0.9%（Z の目はほぼ目減りしない）。参考：一番の目（1分前）301%（12点）、期待値≥1.1 153%（85点）
+- やり直し方：本番DBをダウンロード → KDB/KPH を指定して ana_build・tri3_build（out/live_t1、期間を伸ばす）→ build_t1.py → `ANGLE_CACHE=out/angle_base_t1.pkl python -I -X utf8 research/z_forward.py reports/z_forward.md`
