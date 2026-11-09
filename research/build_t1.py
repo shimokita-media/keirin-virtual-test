@@ -4,7 +4,7 @@ K = "C:/Users/take0/.claude/keirin/"
 exec(open(K + "research/tri_live.py", encoding="utf-8").read().split("def rules")[0])
 T0cols = pd.read_pickle(K + "out/angle_base.pkl").columns
 SR = pd.read_pickle(K + "out/side_races_full.pkl").set_index("race_id")
-X = prep(pd.read_pickle(K + "out/live_t1/tri.pkl")); X = X[(X["class"] != "L級") & (X.odds <= 300)].copy()
+X = prep(pd.read_pickle(K + "out/live_t1/tri.pkl")); X = X[(X["class"] != "L級") & (X.odds <= 300)].copy().reset_index(drop=True)
 for c in ("race_type", "venue", "venue_id", "cup_id", "close_at", "start_at"): X[c] = X.race_id.map(SR[c])
 s01, s12 = X.s01 == 1, X.s12 == 1; third = (X.r2_pos == 2) & s12; same3 = s01 & s12
 order = same3 & (X.r0_pos == 0) & (X.r1_pos == 1) & (X.r2_pos == 2); nine, d2 = X.entries_number >= 9, X.day_index >= 2

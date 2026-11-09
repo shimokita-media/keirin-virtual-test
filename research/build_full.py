@@ -10,7 +10,7 @@ for nm in ("races", "entries", "results"):
     pd.concat([pd.read_pickle(K + f"out/side_{nm}{s}.pkl") for s in ("", "_live", "_y2024a")]).drop_duplicates(keys).to_pickle(K + f"out/side_{nm}_full.pkl")
 parts = []
 for f in ("out/fresh8/tri.pkl", "out/y2024a/tri.pkl"):
-    X = prep(pd.read_pickle(K + f)); X = X[(X["class"] != "L級") & (X.odds <= 300)].copy()
+    X = prep(pd.read_pickle(K + f)); X = X[(X["class"] != "L級") & (X.odds <= 300)].copy().reset_index(drop=True)  # 行番号の重複を振り直す
     meta = SR.set_index("race_id")
     for c in ("race_type", "venue", "venue_id", "cup_id", "close_at", "start_at"): X[c] = X.race_id.map(meta[c])
     s01, s12 = X.s01 == 1, X.s12 == 1; third = (X.r2_pos == 2) & s12; same3 = s01 & s12

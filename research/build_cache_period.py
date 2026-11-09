@@ -9,7 +9,7 @@ exec(open(K + "research/tri_live.py", encoding="utf-8").read().split("def rules"
 T0cols = pd.read_pickle(K + "out/angle_base.pkl").columns  # 列をそろえる（機械が同じ特徴量を使えるように）
 SR = pd.read_pickle(K + f"out/side_races{suf}.pkl").drop_duplicates("race_id").set_index("race_id")
 X = prep(pd.read_pickle(K + src if not src.startswith(("C:", "/")) else src))
-X = X[(X["class"] != "L級") & (X.odds <= 300)].copy()
+X = X[(X["class"] != "L級") & (X.odds <= 300)].copy().reset_index(drop=True)  # 小分けで作った表は行番号が重複するので振り直す（重複したまま印を付けると、同じ番号の行すべてに印が付く。2026-11-10 に実際に起きた）
 for c in ("race_type", "venue", "venue_id", "cup_id", "close_at", "start_at"): X[c] = X.race_id.map(SR[c])
 s01, s12 = X.s01 == 1, X.s12 == 1; third = (X.r2_pos == 2) & s12; same3 = s01 & s12
 order = same3 & (X.r0_pos == 0) & (X.r1_pos == 1) & (X.r2_pos == 2); nine, d2 = X.entries_number >= 9, X.day_index >= 2
