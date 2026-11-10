@@ -26,6 +26,7 @@ def keep_awake(on=True):
 SNAPSHOTS = {"T10": (9.0, 11.0), "T5": (4.5, 5.8), "T1": (0.4, 1.5), "T05": (0.05, 0.7)}  # 記録だけ（判断には使わない）
 # T05（2026-11-11〜、ユーザー了承）：締切3〜42秒前の倍率。当たりを知っているお金は締切前の最後の55秒以内に入る（research/snap_timing.py）ので、
 # 判断を締切に近づける価値があるかを確かめるため。ループは30秒おきなので幅は30秒より広く、判断の窓（0.75分〜）とは重ねない
+LATE_SNAPSHOTS = ("T05",)  # 1回のループで、全レースの判断のあとにまとめて取るスナップショット
 DECIDE_WINDOW = (0.75, 1.5)  # 2026-11-10〜 締切1分前ごろに判断（ユーザー希望：目減り約-3%）。11-07〜11-09 は2〜3分前、それまでは4〜7分前
 NOTIFY_RULE = False  # 2026-11-07〜 法則枠は通知せず記録のみ。Discord の買い目・結果はワイド枠だけ
 ONLY_RULE = True  # 2026-11-06〜 法則枠(B1R)のみ記録（B0/B1・検証買い・万車券枠は停止。結果回収は継続）
@@ -66,6 +67,8 @@ def tick(con, done_results):
         try:
             # 倍率が「いつ」「どれだけ」動くかを調べるため、締切10分前・5分前・1分前の倍率も記録する（2026-11-07〜）
             for ph, (lo, hi) in SNAPSHOTS.items():
+                if ph in LATE_SNAPSHOTS:  # 締切直前の記録は、全レースの判断を済ませたあとに取る（下の「判断のあとの記録」）
+                    continue
                 if lo <= mins <= hi and not con.execute(
                         "SELECT 1 FROM odds WHERE race_id=? AND phase=? AND source='winticket' LIMIT 1", (rid, ph)).fetchone():
                     kr.fetch_race(con, r, ph)
@@ -161,6 +164,19 @@ def tick(con, done_results):
                             notify.discord(msg)
         except Exception:
             say("ERR", rid, traceback.format_exc()[-400:])
+    # 判断のあとの記録（2026-11-11〜）：締切直前のスナップショット（T05）は、このループの全レースの判断（B1R）を済ませてから取る。
+    # 先に取ると、その取得のあいだ締切の近い別のレースの判断が待たされ、判断の窓を外れるおそれがある（Codex のレビューの指摘）
+    for r in pre:
+        rid = r["race_id"]
+        for ph in LATE_SNAPSHOTS:
+            lo, hi = SNAPSHOTS[ph]
+            mins = (r["close_at"] - time.time()) / 60
+            try:
+                if lo <= mins <= hi and not con.execute(
+                        "SELECT 1 FROM odds WHERE race_id=? AND phase=? AND source='winticket' LIMIT 1", (rid, ph)).fetchone():
+                    kr.fetch_race(con, r, ph)
+            except Exception:
+                say("ERR", ph, rid, traceback.format_exc()[-300:])
     # レース後インタビュー（WINTICKET の結果ページ。2026-11-10〜、ユーザー依頼）：締切30分後・90分後に見る。1ループ1件まで
     for r in rs:
         rid, since = r["race_id"], (time.time() - r["close_at"]) / 60
