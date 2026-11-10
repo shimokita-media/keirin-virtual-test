@@ -15,8 +15,22 @@ POS = ["良い", "良かった", "悪くない", "調子がいい", "状態は�
 def answers(qa):
     try: return " ".join(t.get("answer", "") for t in json.loads(qa))
     except Exception: return ""
+import re
+# 打ち消し（11/10 9:00 追加、⑥を見る前）：言葉のすぐ後ろ（同じ文の中・20文字まで）にこれがあれば、その出てきた所は数えない
+NEGATORS = ["問題な", "問題無", "問題は無", "問題はな", "問題もな", "問題も無", "大丈夫", "心配な", "心配は無", "心配はな", "ではな", "じゃな", "ではありません",
+            "ことはな", "事はな", "ことなく", "事なく", "わけではな", "訳ではな", "治っ", "治り", "治ま", "影響はな", "影響な", "気にならな",
+            "はない", "もない", "は無い", "も無い", "はありません", "もありません", "はなかった", "もなかった"]
+END = re.compile(r"[。！!？?\n]")
+def hit(txt, w):
+    i = txt.find(w)
+    while i >= 0:
+        j = i + len(w); m = END.search(txt, j)
+        seg = txt[j: min(m.start() if m else len(txt), j + 20)]
+        if not any(n in seg for n in NEGATORS) or any(u in seg for u in ("とは言え", "とはいえ", "とも言え", "わけじゃな", "訳じゃな", "とは言いきれ", "とは言い切れ")): return True  # 「大丈夫とは言えない」は打ち消しの打ち消し＝数える
+        i = txt.find(w, i + 1)
+    return False
 def score(txt):
-    neg = sum(1 for w in NEG if w in txt); pos = sum(1 for w in POS if w in txt)
+    neg = sum(1 for w in NEG if hit(txt, w)); pos = sum(1 for w in POS if hit(txt, w))
     # 「悪くない」「良くない」の重なりを直す（「悪くない」は悪いに数えない＝「悪い」は部分一致しないので不要。「良くない」は「良い」に一致しない）
     return neg, pos
 con = sqlite3.connect("file:" + K + "keirin.sqlite?mode=ro", uri=True, timeout=30)
