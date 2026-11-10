@@ -114,6 +114,10 @@ def tick(con, done_results):
                         kr.record_T(con, r, odds, meta)
                     except Exception:
                         say("ERR B3X", rid, traceback.format_exc()[-300:])
+                    try:  # 400m・欠場なしの一番の目（B3Y、2026-11-10〜、ユーザー依頼）。通知はせず記録だけ
+                        kr.record_Y(con, r, odds, meta, tri)
+                    except Exception:
+                        say("ERR B3Y", rid, traceback.format_exc()[-300:])
                     # 直前情報（2026-11-10〜、ユーザー了承）：欠場者がいるレースは3連単が3期間とも割高（36〜66%）なので、3連単枠は通知しない（記録は残す）
                     try:
                         absent_n = con.execute("SELECT COUNT(*) FROM entries WHERE race_id=? AND absent=1", (rid,)).fetchone()[0]

@@ -793,6 +793,31 @@ def record_T(con, row, odds, meta):
     return picks
 
 
+def record_Y(con, row, odds, meta, tri):
+    """400m・欠場なしの一番の目 B3Y（2026-11-10〜、ユーザー依頼・記録のみ・通知しない）。KNOWLEDGE ★事前登録Y と同じ条件：
+    3連単枠の一番の目（並びの1番目）× 400mバンク（333m系・500mの場を除く）× 欠場なしのレース。100円。条件は変えない"""
+    mins = (row["close_at"] - time.time()) / 60
+    if not (0.3 <= mins <= 8.0):
+        return None
+    S333 = {"伊東", "小田原", "松戸", "奈良", "富山", "防府", "前橋"}; S500 = {"宇都宮", "大宮", "高知"}
+    top = next((p for p in (tri or []) if p.get("top")), None)
+    absent_n = con.execute("SELECT COUNT(*) FROM entries WHERE race_id=? AND absent=1", (row["race_id"],)).fetchone()[0]
+    ok = top is not None and (row["venue"] or "") not in (S333 | S500) and absent_n == 0
+    created = now().isoformat(timespec="seconds")
+    c, s_, o, tag = (top["combo"], 100, top["odds"], "一番の目") if ok else ("", 0, None, "C" if top is None else ("欠場あり" if absent_n else "400m以外"))
+    sha = hashlib.sha256(f"{row['race_id']}|B3Y|{created}|{c}|{s_}|{o}".encode()).hexdigest()[:16]
+    con.execute("""INSERT INTO predictions(race_id,phase,created_at,close_at,minutes_to_close,bet_type,combo,stake,
+        ref_odds,ref_source,ref_odds_fetched_at,ref_source_updated_at,model_prob,ev_a10,ev_a115,bet_rating,race_rating,reason,sha)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (row["race_id"], "B3Y", created, ts(row["close_at"]), round(mins, 1), "3連単" if s_ else "見送り", c, s_, o, meta["source"],
+                 meta["fetched_at"], meta["source_updated_at"], top.get("p") if ok else None, None, None, tag, "Y" if ok else "C",
+                 json.dumps({"400m・欠場なしの一番の目": "3連単枠の一番の目×400mバンク×欠場なし"}, ensure_ascii=False), sha))
+    con.commit()
+    n = con.execute("SELECT COUNT(*) FROM predictions WHERE race_id=? AND phase='B3Y' AND created_at=?", (row["race_id"], created)).fetchone()[0]
+    assert n == 1, "B3Y read-back mismatch"
+    return [top] if ok else []
+
+
 def record_best(con, row, odds, meta, tri):
     """🏆最強枠 B3S（2026-11-09〜、ユーザー依頼・記録のみ）。3連単枠の一番の目の出走表の点数が3以上のときだけ、
     一番の目の3連単（点数5=500円・3〜4=100円）＋同じ3人の3連複（100円）を記録。読み戻しで一致を確認する"""
