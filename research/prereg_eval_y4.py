@@ -1,7 +1,8 @@
 """y4（2022/11/08〜2023/11/07）での事前登録 U・V・W・Z の判定（KNOWLEDGE.md の登録どおり。結果を見てから変えない）。BH補正つき。
 X（機械v1×期待値≥1.0）は research/x_predict_period.py の予測（v1 の選手の癖は out/v1_tend.pkl＝2025/2〜2026/6/15 で作った表。v1 の予測を完全に再現できることを確認済み）を9番目の引数で渡すと判定する。
 使い方: python -I -X utf8 research/prereg_eval_y4.py 表.pkl sideの接尾辞 予測.pkl 開始日 終了日 前半の最終日 出力.md [v1の予測.pkl]
-（表・予測は research/prereg_full_2024.py で作る：... 20221108 20231107 20230507 y4 --no-check）"""
+（ふつうは research/prereg_full_2024.py 20221108 20231107 20230508 y4 で、表・予測・機械v1 の予測・この判定まで一度に回す。
+  前半の最終日は 20230508＝y4 の365日を 182日・183日に2等分。2026-11-11 に 20230507 から直した。結果を見る前）"""
 import sys, numpy as np, pandas as pd
 K = "C:/Users/take0/.claude/keirin/"
 fT, suf, fZ, d0, d1, half, outp = sys.argv[1:8]

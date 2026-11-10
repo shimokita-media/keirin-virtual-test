@@ -1,6 +1,7 @@
 """事前登録 R・S・T・Y・Z を、まだ見ていない期間で一発で判定する段取り（2026-11-09 作成、11/10 18:00 の予約から呼ぶ）。
 使い方: python -I -X utf8 research/prereg_full_2024.py [開始日 終了日 前半の最終日 名前] [--no-check] [--force]
 既定: 20231108 20250131 20240615 y2024full（事前登録で決めた期間）
+y4（事前登録 U・V・W・X・Z）: 20221108 20231107 20230508 y4 → ⑤のあと機械v1 の予測（X用）を作り、判定は prereg_eval_y4.py を使う。取り込み y4 が 20231107 まで終わっていないと止まる
 段取り：①取り込みの完了確認 → ②選手表・3連単の表（小分け読み込み）→ ③side（小分け）→ ④angle_base 形式の表 → ⑤機械 v2・D の予測 → ⑥判定の表
 - できた分は飛ばす（途中で止まってもやり直せる）。--force で作り直し
 - 取り込み中のDBは長く読まない（各スクリプトは小分け・休みを入れて読む）。最後に取り込みが生きているか確認する"""
@@ -9,6 +10,9 @@ K = "C:/Users/take0/.claude/keirin/"
 args = [a for a in sys.argv[1:] if not a.startswith("--")]
 d0, d1, half, tag = (args + ["20231108", "20250131", "20240615", "y2024full"][len(args):])[:4] if len(args) < 4 else args[:4]
 CHECK, FORCE = "--no-check" not in sys.argv, "--force" in sys.argv
+Y4 = ("20221108", "20231107")  # 事前登録 U・V・W・X・Z を判定する期間（KNOWLEDGE.md の登録どおり）
+if (d0, d1) == Y4 and half != "20230508":
+    print(f"y4 の前半の最終日は 20230508（365日を 182日・183日に2等分）。指定 {half} は登録の「日付で2等分」とずれるので止める"); sys.exit(2)
 OUTD = K + f"out/{tag}/"; os.makedirs(OUTD, exist_ok=True)
 LOG = open(OUTD + "run.log", "a", encoding="utf-8")
 def say(*a):
@@ -30,11 +34,17 @@ def run(step, cmd, out, env=None):
     if r.returncode != 0 or not os.path.exists(out):
         say(f"[{step}] 失敗。ここで止める"); sys.exit(1)
 say(f"=== 期間 {d0}〜{d1}（前半〜{half}）名前 {tag} ===")
-# ① 取り込みの完了確認（事前登録の期間 2023/11〜2025/1 は y2・y3）
+# ① 取り込みの完了確認：判定する期間に重なる取り込み（logs/resume_backfill.bat の期間）が、すべて最後の日まで終わっているか
+#   （2026-11-11 Codex のレビューで、y2・y3 しか見ておらず y4 以降の期間では確認にならないと指摘 → 期間から選ぶ形に直した）
+BACKFILL = {"backfill_y2.log": ("20240201", "20250131"), "backfill_y3.log": ("20231108", "20240131"),
+            "backfill_y4.log": ("20221108", "20231107"), "backfill_y5.log": ("20211108", "20221107"), "backfill_y6.log": ("20201108", "20211107")}
 if CHECK:
-    y2, y3 = last_date("backfill_y2.log"), last_date("backfill_y3.log")
-    say(f"[1] 取り込みの最後の日：y2={y2}（20250131 で完了）・y3={y3}（20240131 で完了）")
-    if y2 < "20250131" or y3 < "20240131":
+    need = {lg: e for lg, (s, e) in BACKFILL.items() if s <= d1 and e >= d0}
+    if not need and d1 <= "20250131":
+        say("[1] この期間に当てはまる取り込みのログがない。--no-check で動かす前に、取り込み済みか自分で確かめる"); sys.exit(2)
+    got = {lg: last_date(lg) for lg in need}
+    say("[1] 取り込みの最後の日：" + "・".join(f"{lg[9:11]}={got[lg] or 'なし'}（{e} で完了）" for lg, e in need.items()))
+    if any(got[lg] < e for lg, e in need.items()):
         say("[1] まだ取り込み中。終わってからもう一度実行する"); sys.exit(2)
 PY = ["python", "-I"]
 run("2a 選手表", PY + ["research/ana_build_small.py", d0, d1, OUTD + "ana.pkl"], OUTD + "ana.pkl")
@@ -45,7 +55,12 @@ run("4 表", PY + ["research/build_cache_period.py", OUTD + "tri.pkl", f"_{tag}"
 run("5 予測", PY + ["research/z_predict_period.py", OUTD + "zpred.pkl"], OUTD + "zpred.pkl", env={"ANGLE_CACHE": OUTD + "cache.pkl", "SIDE_SUFFIX": f"_{tag}"})
 rep = K + f"reports/prereg_{tag}.md"
 if os.path.exists(rep) and not FORCE: os.remove(rep)
-run("6 判定", PY + ["research/prereg_eval_full.py", OUTD + "cache.pkl", f"_{tag}", OUTD + "zpred.pkl", d0, d1, half, rep], rep)
+if (d0, d1) == Y4:
+    # y4 は事前登録 U・V・W・X・Z の判定。X 用に機械v1 の予測も作る（作らないと X が「未判定」になる）
+    run("5b 予測（機械v1・X用）", PY + ["research/x_predict_period.py", OUTD + "xpred.pkl"], OUTD + "xpred.pkl", env={"ANGLE_CACHE": OUTD + "cache.pkl", "SIDE_SUFFIX": f"_{tag}"})
+    run("6 判定（y4）", PY + ["research/prereg_eval_y4.py", OUTD + "cache.pkl", f"_{tag}", OUTD + "zpred.pkl", d0, d1, half, rep, OUTD + "xpred.pkl"], rep)
+else:
+    run("6 判定", PY + ["research/prereg_eval_full.py", OUTD + "cache.pkl", f"_{tag}", OUTD + "zpred.pkl", d0, d1, half, rep], rep)
 # 取り込みが生きているか
 try:
     ps = subprocess.run(["powershell", "-NoProfile", "-Command", "(Get-CimInstance Win32_Process -Filter \"Name='python.exe'\" | Where-Object { $_.CommandLine -like '*backfill.py*' }).CommandLine"], capture_output=True, text=True).stdout.strip()
