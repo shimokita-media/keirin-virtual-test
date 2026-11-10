@@ -106,6 +106,10 @@ def tick(con, done_results):
                         kr.record_watch(con, r, odds, meta)
                     except Exception:
                         say("ERR B3A/B3K", rid, traceback.format_exc()[-300:])
+                    try:  # ワイド枠（広げた版）B3W（2026-11-10〜、ユーザー依頼）。通知はせず記録だけ
+                        kr.record_wide_wide(con, r, odds, meta)
+                    except Exception:
+                        say("ERR B3W", rid, traceback.format_exc()[-300:])
                     try:  # T枠（B3X、2026-11-10〜、ユーザー依頼）。通知はせず記録だけ
                         kr.record_T(con, r, odds, meta)
                     except Exception:

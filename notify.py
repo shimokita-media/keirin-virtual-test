@@ -47,8 +47,8 @@ def discord(text):
             print(kr.now().strftime("%H:%M:%S"), "discord FAILED:", part.splitlines()[0], flush=True)
 
 
-LABEL = {"B1R": "法則枠", "B1W": "ワイド枠", "B3T": "3連単枠", "B3A": "ワイドA", "B3K": "形のワイド", "B3S": "最強枠"}
-ICON = {"B1R": "📐", "B1W": "🎯", "B3T": "🎰", "B3A": "👀", "B3K": "👀", "B3S": "🏆"}
+LABEL = {"B1R": "法則枠", "B1W": "ワイド枠", "B3T": "3連単枠", "B3A": "ワイドA", "B3K": "形のワイド", "B3S": "最強枠", "B3W": "ワイド枠（広げた版）"}
+ICON = {"B1R": "📐", "B1W": "🎯", "B3T": "🎰", "B3A": "👀", "B3K": "👀", "B3S": "🏆", "B3W": "👀"}
 
 
 def pay_of(con, rid, bt, cb):
@@ -140,7 +140,7 @@ def day_summary(con, day):
         inv = sum(x[3] for x in rows)
         ret = sum(x[6] * x[3] // 100 for x in rows)
         hits = [x for x in rows if x[6] and con.execute("SELECT 1 FROM payouts WHERE race_id=? AND bet_type=? AND combo=?", (x[0], x[1], x[2])).fetchone()]  # 返還は的中に数えない
-        L.append(f"{ICON[ph]} **{label}**{'（記録のみ）' if ph in ('B1R', 'B3A', 'B3K', 'B3S') else ''}")
+        L.append(f"{ICON[ph]} **{label}**{'（記録のみ）' if ph in ('B1R', 'B3A', 'B3K', 'B3S', 'B3W') else ''}")
         L.append(f"　{len({x[0] for x in rows})}レース・{len(rows)}点・的中{len(hits)}　{yen(inv)} → {yen(ret)}（**{signed(ret - inv)}**）"
                  f"　回収率 **{ret / inv:.0%}**")
         if hits:

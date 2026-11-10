@@ -660,6 +660,33 @@ def record_wide(con, row, odds, meta):
     return picks
 
 
+def record_wide_wide(con, row, odds, meta):
+    """ワイド枠（広げた版）B3W（2026-11-10〜、ユーザー依頼・記録のみ・通知しない）。締切前の点数を早く貯めるため、
+    ワイド枠の範囲を広げた「5〜12倍 × 割安度0.80以上」を各100円（最大8点）。今のワイド枠（6〜10倍・0.85以上）に入る目は
+    bet_rating に「内」、広げた分だけの目は「外」と書き、後で分けて集計できるようにする。ワイド枠 B1W には影響しない"""
+    mins = (row["close_at"] - time.time()) / 60
+    if not (0.3 <= mins <= 8.0):
+        return None
+    picks = [r for r in evaluate(odds) if r["bet_type"] == "ワイド" and 5 <= r["odds"] <= 12 and r["evc"] >= 0.80]
+    picks = sorted(picks, key=lambda r: -r["evc"])[:8]
+    created = now().isoformat(timespec="seconds")
+    inside = lambda r: 6 <= r["odds"] <= 10 and r["evc"] >= 0.85
+    recs = [(r["combo"], 100, r["odds"], r["p"], r["ev1"], r["ev2"], f"割安度{r['evc']:.2f} {'内' if inside(r) else '外'}") for r in picks] \
+        or [("", 0, None, None, None, None, "C")]
+    for c, s_, o, p, e1, e2, tag in recs:
+        sha = hashlib.sha256(f"{row['race_id']}|B3W|{created}|{c}|{s_}|{o}".encode()).hexdigest()[:16]
+        con.execute("""INSERT INTO predictions(race_id,phase,created_at,close_at,minutes_to_close,bet_type,combo,stake,
+            ref_odds,ref_source,ref_odds_fetched_at,ref_source_updated_at,model_prob,ev_a10,ev_a115,bet_rating,race_rating,reason,sha)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    (row["race_id"], "B3W", created, ts(row["close_at"]), round(mins, 1), "ワイド" if s_ else "見送り", c, s_, o, meta["source"],
+                     meta["fetched_at"], meta["source_updated_at"], p, e1, e2, tag, "W" if picks else "C",
+                     json.dumps({"ワイド枠（広げた版）": "ワイド5〜12倍・割安度0.80以上・最大8点"}, ensure_ascii=False), sha))
+    con.commit()
+    n = con.execute("SELECT COUNT(*) FROM predictions WHERE race_id=? AND phase='B3W' AND created_at=?", (row["race_id"], created)).fetchone()[0]
+    assert n == len(recs), "B3W read-back mismatch"
+    return picks
+
+
 def record_trifecta(con, row, odds, meta):
     """3連単枠 B3T（2026-11-09〜、ユーザー依頼で追加）。tri_rule.py の「形の法則」5つ（3期間すべて100%超え）。
     締切2〜3分前の倍率で判断して各100円（最大6点）を記録し、読み戻しで一致を確認する。ワイド枠・法則枠には影響しない"""
