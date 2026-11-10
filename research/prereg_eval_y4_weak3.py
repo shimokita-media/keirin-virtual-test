@@ -27,7 +27,9 @@ kmax = max([i + 1 for i, j in enumerate(order) if pv[j] <= 0.05 * (i + 1) / m], 
 L = [f"# y4 での事前登録「弱い3着」2つの判定（{d0}〜{d1}・前半〜{half}）", "",
      f"{T.date.nunique()}日・{T.race_id.nunique():,}R。最終オッズ・確定の払戻・各100円。合格＝下限95%以上・前半後半とも100%超・BH補正（2つ）で有意。", "",
      "| 呼び名 | 判定 | 回収率 | 点数・当たり | 95%の範囲 | 前半 / 後半 | t | p値（BH） |", "|---|---|---|---|---|---|---|---|"]
-for k in names:
+for k in G:
+    if k not in R:  # 点数が2点未満でも行を消さない（2026-11-11 Codex の指摘。合否の条件は変えない）
+        L.append(f"| {k} | 判定不可（{len(G[k])}点） | − | − | − | − | − | − |"); continue
     s = R[k]; ok = s["lo"] >= 0.95 and s["h1"] > 1 and s["h2"] > 1 and bh[k]
     L.append(f"| {k} | {'**合格**' if ok else '不合格'} | **{s['roi']:.0%}** | {s['n']}点・{s['hits']}本 | {s['lo']:.0%}〜{s['hi']:.0%} | {s['h1']:.0%} / {s['h2']:.0%} | {s['t']:+.2f} | {s['p']:.3f}（{'有意' if bh[k] else '有意でない'}） |")
 L += ["", f"参考：3連単全部 {T.ret.mean():.0%}／本命3連単×弱い3着（3着5位以下・登録T） {T[(T.odds <= 10) & ((T.G == 1) | (T.entries_number >= 9)) & (T.r2_pt_rank >= 5)].ret.mean():.0%}／400m・欠場なしの一番の目（登録Y） {T[T.is_top & w & ~T.race_id.isin(ab)].ret.mean():.0%}"]

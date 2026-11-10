@@ -60,6 +60,11 @@ if (d0, d1) == Y4:
     run("5b 予測（機械v1・X用）", PY + ["research/x_predict_period.py", OUTD + "xpred.pkl"], OUTD + "xpred.pkl", env={"ANGLE_CACHE": OUTD + "cache.pkl", "SIDE_SUFFIX": f"_{tag}"})
     run("6 判定（y4）", PY + ["research/prereg_eval_y4.py", OUTD + "cache.pkl", f"_{tag}", OUTD + "zpred.pkl", d0, d1, half, rep, OUTD + "xpred.pkl"], rep)
     # 事前登録「弱い3着」2つ（2026-11-11 0:50 登録・y4 を見る前）。U〜Z とは別の表・別の BH 補正
+    # 専用の報告も毎回作り直す（残っていると run() が飛ばして古い結果が残る。2026-11-11 Codex の指摘）
+    for extra in (f"reports/prereg_{tag}_avoid.md", f"reports/prereg_{tag}_weak3.md"):
+        if os.path.exists(K + extra) and not FORCE: os.remove(K + extra)
+    # 事前登録「一番の目×割高な目を外す」（2026-11-11 2:25 登録・y4 を見る前）。別の表・BH は m=1
+    run("6c 判定（y4・一番の目×割高な目を外す）", PY + ["research/prereg_eval_y4_avoid.py", OUTD + "cache.pkl", f"_{tag}", d0, d1, half, K + f"reports/prereg_{tag}_avoid.md"], K + f"reports/prereg_{tag}_avoid.md")
     run("6b 判定（y4・弱い3着）", PY + ["research/prereg_eval_y4_weak3.py", OUTD + "cache.pkl", f"_{tag}", d0, d1, half, K + f"reports/prereg_{tag}_weak3.md"], K + f"reports/prereg_{tag}_weak3.md")
 else:
     run("6 判定", PY + ["research/prereg_eval_full.py", OUTD + "cache.pkl", f"_{tag}", OUTD + "zpred.pkl", d0, d1, half, rep], rep)

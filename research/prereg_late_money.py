@@ -7,7 +7,7 @@ import sys, sqlite3, numpy as np, pandas as pd
 NL = chr(10)
 FIRST, CAP, CUT, NEED = "20261110", 200, 0.95, 1000
 con = sqlite3.connect("file:C:/Users/take0/.claude/keirin/out/live_db/keirin.sqlite?mode=ro", uri=True)
-O = pd.read_sql("SELECT race_id, combo, phase, odds FROM odds WHERE bet_type='3連単' AND phase IN ('T10','T1') AND odds > 0", con)
+O = pd.read_sql("SELECT race_id, combo, phase, odds FROM odds WHERE bet_type='3連単' AND phase IN ('T10','T1') AND odds > 0 ORDER BY fetched_at", con)  # 同じ組が何回か記録されても最後（新しい方）を取る
 O = O[O.race_id.str[-8:] >= FIRST]
 W = O.pivot_table(index=["race_id", "combo"], columns="phase", values="odds", aggfunc="last").dropna().reset_index()
 PY = pd.read_sql("SELECT race_id, combo, payout FROM payouts WHERE bet_type='3連単'", con)
@@ -45,4 +45,17 @@ P(NL + f"比（縮んだ÷残り）＝ **{m['est']:.2f}**（95%の範囲 {m['lo'
 P("## 参考（合否に使わない）：倍率の上限ごと" + NL + "| 上限 | 比 | 95%の範囲 | 縮んだ目の回収率 | 残りの回収率 |" + NL + "|---|---|---|---|---|")
 for cap in (30, 50, 100, 300):
     x = judge(cap, False); P(f"| {cap}倍以下 | {x['est']:.2f} | {x['lo']:.2f}〜{x['hi']:.2f} | {x['rois']:.0%} | {x['roir']:.0%} |")
+# 参考：縮み方の強さ別（200倍以下）
+X2 = W[W.T1 <= CAP].copy(); q2 = 1 / X2.T1; X2["p1"] = q2 / q2.groupby(X2.race_id).transform("sum"); X2["mv"] = X2.T1 / X2.T10
+P(NL + "## 参考：縮み方の強さ別（200倍以下）" + NL + "| 10分前→1分前 | 点数 | 当たり | 当たり÷見込み | 回収率 |" + NL + "|---|---|---|---|---|")
+for nm, mm in (("15%以上縮んだ（0.85未満）", X2.mv < 0.85), ("5〜15%縮んだ（0.85〜0.95）", X2.mv.between(0.85, CUT, inclusive="left")), ("残り（0.95以上）", X2.mv >= CUT)):
+    x = X2[mm]; P(f"| {nm} | {len(x):,} | {int(x.hit.sum())} | {x.hit.sum() / max(x.p1.sum(), 1e-9):.2f} | {x.ret.mean():.0%} |")
+# 参考：本番の3連単の買い方（predictions の B3T 3連単枠・B3T のうち一番の目・B3X T枠）から縮んだ目を外すと
+PR = pd.read_sql("SELECT race_id, phase, combo, reason FROM predictions WHERE bet_type='3連単' AND phase IN ('B3T','B3X')", con)
+PR = PR[PR.race_id.str[-8:] >= FIRST].merge(W[["race_id", "combo", "T10", "T1", "ret"]], on=["race_id", "combo"], how="inner")
+PR["sh"] = (PR.T1 / PR.T10) < CUT
+P(NL + "## 参考：本番の3連単の買い方から縮んだ目を外すと（記録の目・確定の払戻）" + NL + "| 買い方 | 全部 | 縮んだ目 | 縮んだ目を外した残り |" + NL + "|---|---|---|---|")
+for nm, g in (("3連単枠（B3T）", PR[PR.phase == "B3T"]), ("一番の目", PR[(PR.phase == "B3T") & PR.reason.fillna("").str.contains("一番の目")]), ("T枠（B3X）", PR[PR.phase == "B3X"])):
+    f = lambda x: f"{x.ret.mean():.0%}（{len(x)}点・{int((x.ret > 0).sum())}本）" if len(x) else "−"
+    P(f"| {nm} | {f(g)} | {f(g[g.sh])} | {f(g[~g.sh])} |")
 print("races", nr, "judged", ok)
