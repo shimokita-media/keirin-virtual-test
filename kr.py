@@ -89,6 +89,9 @@ def db():
     -- 2026-11-10〜 レース後インタビュー（WINTICKET の結果ページ。1レース1人1行）
     CREATE TABLE IF NOT EXISTS result_interviews(race_id TEXT, player_id TEXT, cup_id TEXT, schedule_id TEXT, qa_json TEXT,
       interviewer_type INT, interview_type INT, fetched_at TEXT, PRIMARY KEY(race_id, player_id));
+    -- 2026-11-10〜 選手の条件別の成績（WINTICKET の出走表 records。ライン内の位置別・バンク別・時間帯別・天気別・レースの種類別・戦法の成功率など）。1レース1人1行、最初に取れたもの
+    CREATE TABLE IF NOT EXISTS rider_stats(race_id TEXT, number INT, player_id TEXT, stats_json TEXT, fetched_at TEXT,
+      PRIMARY KEY(race_id, number));
     CREATE TABLE IF NOT EXISTS results(race_id TEXT, rank INT, number INT, player_id TEXT, factor TEXT,
       margin TEXT, fetched_at TEXT, PRIMARY KEY(race_id, rank, number));
     CREATE TABLE IF NOT EXISTS payouts(race_id TEXT, bet_type TEXT, combo TEXT, payout INT, popularity INT,
@@ -194,6 +197,38 @@ def save_interviews(con, q, rid, t, cup_id=None):
     return n
 
 
+STAT_KEYS = ("raceTypeQualifyingRound", "raceTypeSemifinal", "raceTypeFinal", "raceTypeLoserRound", "raceTypeSpecial",
+             "trackDistance333", "trackDistance400", "trackDistance500", "lineSingleHorseman", "linePositionFirst",
+             "linePositionSecond", "linePositionThird", "lineCompete", "weatherSunny", "weatherCloudy", "weatherRainy",
+             "weatherSnowy", "hourTypeNormal", "hourTypeMorning", "hourTypeNight", "hourTypeMidnight", "hourTypeSummertime",
+             "exSpurt", "exThrust", "exLeftBehind", "exSplitLine", "exSnatch", "exCompete", "first", "second", "third",
+             "others", "hasHome", "home", "hasModifiedGearRatio", "modifiedGearRatio", "previousCupId")
+
+
+def save_rider_stats(con, rd, rid, t):
+    """出走表の records にある選手の条件別の成績（ライン内の位置別・バンク別など）を rider_stats に保存する（最初に取れたものを残す）。
+    戻り値: 新しく保存した人数"""
+    num = {e["playerId"]: e["number"] for e in rd.get("entries") or []}
+    n = 0
+    for rc in rd.get("records") or []:
+        pid = rc.get("playerId")
+        if pid not in num:
+            continue
+        st = {}
+        for k in STAT_KEYS:  # 割合（Percentage）は回数から計算できるので省く：条件別は [1着,2着,3着,着外]、戦法は [回数,成功]
+            v = rc.get(k)
+            if isinstance(v, dict) and "others" in v:
+                st[k] = [v.get("first"), v.get("second"), v.get("third"), v.get("others")]
+            elif isinstance(v, dict) and "succeeded" in v:
+                st[k] = [v.get("total"), v.get("succeeded")]
+            elif v is not None:
+                st[k] = v
+        cur = con.execute("INSERT OR IGNORE INTO rider_stats VALUES(?,?,?,?,?)",
+                          (rid, num[pid], pid, json.dumps(st, ensure_ascii=False, separators=(",", ":")), t))
+        n += max(cur.rowcount, 0)
+    return n
+
+
 def result_url(row):
     """レースの結果ページの「レース後コメント」の表示（ふつうのページ。robots.txt で禁止されているのは /keirin/cups/ だけ）"""
     return (f"https://www.winticket.jp/keirin/{row['slug']}/raceresult/{row['cup_id']}/{row['day_index']}/{row['race_no']}"
@@ -284,6 +319,11 @@ def fetch_race(con, row, phase=""):
     # 前検日インタビュー（2026-11-10 追加、ユーザー依頼。保存に失敗しても本体の取り込みは止めない）
     try:
         save_interviews(con, q, rid, t, row["cup_id"])
+    except Exception:
+        pass
+    # 選手の条件別の成績（2026-11-10 追加、ユーザー依頼。保存に失敗しても本体の取り込みは止めない）
+    try:
+        save_rider_stats(con, rd, rid, t)
     except Exception:
         pass
     # オッズ
