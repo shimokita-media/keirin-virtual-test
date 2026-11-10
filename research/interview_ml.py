@@ -14,6 +14,8 @@ G = {"怪我": ["腰", "痛", "ケガ", "怪我", "落車"], "体調": ["体調"
      "苦戦": ["苦しい", "きつい", "一杯", "いっぱい", "脚がない", "ダメ", "だめ"], "苦手": ["嫌い", "苦手"],
      "好調": ["良い", "良かった", "悪くない", "調子がいい", "状態はいい", "状態がいい", "感じはいい", "感触はいい", "軽い", "軽かった", "仕上が", "手応え", "好調", "自信"],
      "得意": ["得意", "好き", "相性"]}
+_src = open(K + "research/interview_eval.py", encoding="utf-8").read()
+exec(_src[_src.index("import re"): _src.index("def score")])  # 打ち消し（体調問題ない等）を数えない hit() を事前登録I と同じにする
 def answers(qa):
     try: return " ".join(t.get("answer", "") for t in json.loads(qa))
     except Exception: return ""
@@ -36,7 +38,7 @@ for src in ("pre", "post"):
     E[f"has_{src}"] = (t != "").astype(int); F.append(f"has_{src}")
     E[f"len_{src}"] = t.str.len(); F.append(f"len_{src}")
     for g, ws in G.items():
-        E[f"{g}_{src}"] = t.map(lambda s: sum(1 for w in ws if w in s)); F.append(f"{g}_{src}")
+        E[f"{g}_{src}"] = t.map(lambda s: sum(1 for w in ws if hit(s, w))); F.append(f"{g}_{src}")
 RF = E.set_index(["race_id", "number"])[F]
 T = pd.read_pickle(K + "out/angle_base_full.pkl")[["race_id", "combo", "date", "p", "odds", "ret"]]
 T = T[T.date.between(S0, VA_END)].copy()
@@ -64,6 +66,18 @@ def ll(p, y): p = np.clip(p, 1e-7, 1 - 1e-7); return -(y * np.log(p) + (1 - y) *
 d = pd.Series(ll(va.pm.to_numpy(), va.y.to_numpy()) - ll(pn, va.y.to_numpy())).groupby(va.race_id.to_numpy()).sum()
 P(f"- 木の数（確認で止めた）：{m.best_iteration}")
 P(f"- 当てる力（確認期間、レースごとの対数損失の差・＋なら機械が良い）：平均 {d.mean():+.4f}、**t={d.mean() / (d.std() / np.sqrt(len(d))):+.2f}**（{len(d):,}R）")
+def fit(cols):
+    a = lgb.Dataset(tr[cols], tr.y, init_score=tr.init); b = lgb.Dataset(va[cols], va.y, init_score=va.init)
+    mm = lgb.train(prm, a, 1000, valid_sets=[b], callbacks=[lgb.early_stopping(50, verbose=False)])
+    return 1 / (1 + np.exp(-(mm.predict(va[cols], raw_score=True) + va.init.to_numpy()))), mm.best_iteration
+P(NL + "### インタビューの分だけ効いているか（同じ作り方で特徴量を減らしたモデルと比べる。＋なら全部入りが良い）")
+P("| 比べる相手 | 木の数 | 相手の市場からの改善の t | 全部入り−相手 の平均 | t |" + NL + "|---|---|---|---|---|")
+LF = [c for c in FX if "_len_" in c or "_has_" in c]
+for lab, cols in (("倍率だけ", ["lodds"]), ("倍率＋話の有無・長さ（言葉の中身なし）", ["lodds"] + LF)):
+    pb, bi = fit(cols)
+    db = pd.Series(ll(va.pm.to_numpy(), va.y.to_numpy()) - ll(pb, va.y.to_numpy())).groupby(va.race_id.to_numpy()).sum()
+    dd = pd.Series(ll(pb, va.y.to_numpy()) - ll(pn, va.y.to_numpy())).groupby(va.race_id.to_numpy()).sum()
+    P(f"| {lab} | {bi} | {db.mean() / (db.std() / np.sqrt(len(db))):+.2f} | {dd.mean():+.4f} | **{dd.mean() / (dd.std() / np.sqrt(len(dd))):+.2f}** |")
 va = va.assign(pn=pn)
 P(NL + "| 選び方（確認期間） | 点数 | 当たり | 回収率 |" + NL + "|---|---|---|---|")
 for th in (1.0, 1.1, 1.2, 1.3):
