@@ -21,7 +21,10 @@ print("本番DBの確定済みの最後の日:", last)
 # ② 1分前の表
 env = {"KDB": LDB, "KPH": "T1"}
 sh(PY + [K + "research/ana_build.py", "20261107", last, K + "out/live_t1/ana.pkl"], env)
-sh(PY + [K + "research/tri3_build.py", K + "out/live_t1/ana.pkl", K + "out/live_t1/tri.pkl"], env)
+# 機械の特徴量（直近の着順・番狂わせの履歴）を足す。2026-11-11 まで抜けていて、機械の重み16〜25%の特徴量が空だった
+# （h_* は 11/7 からの履歴しかないので、学習したときより履歴が短い点に注意）
+sh(PY + [K + "research/ext_small.py", K + "out/live_t1/ana.pkl", K + "out/live_t1/ana_ext.pkl"], {"KDB": LDB})
+sh(PY + [K + "research/tri3_build.py", K + "out/live_t1/ana_ext.pkl", K + "out/live_t1/tri.pkl"], env)
 # ③ side（本番DB分）を作り直し、full をまとめ直す
 sh(PY + [K + "research/angle_side2.py", LDB, "20261106", last, "live"])
 for nm, keys in (("races", ["race_id"]), ("entries", ["race_id", "number"]), ("results", ["race_id", "rank", "number"])):
@@ -30,4 +33,7 @@ for nm, keys in (("races", ["race_id"]), ("entries", ["race_id", "number"]), ("r
 sh(PY + [K + "research/build_cache_period.py", K + "out/live_t1/tri.pkl", "_full", K + "out/angle_base_t1.pkl"])
 sh(PY + [K + "research/z_forward.py", K + "reports/z_forward.md"], {"ANGLE_CACHE": K + "out/angle_base_t1.pkl"})
 sh(PY + [K + "research/preclose_1min.py", K + "reports/preclose_1min.md"])
-print("完了：reports/z_forward.md・reports/preclose_1min.md")
+# ⑦ 本番の記録で判定する事前登録（1,000R たまるまでは件数だけ。たまったら登録どおり判定）
+sh(PY + [K + "research/prereg_late_money.py", K + "reports/prereg_late_money.md"])
+sh(PY + [K + "research/prereg_leadlag.py", K + "reports/prereg_leadlag.md"])
+print("完了：reports/z_forward.md・reports/preclose_1min.md・reports/prereg_late_money.md・reports/prereg_leadlag.md")

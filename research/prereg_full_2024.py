@@ -13,6 +13,9 @@ CHECK, FORCE = "--no-check" not in sys.argv, "--force" in sys.argv
 Y4 = ("20221108", "20231107")  # 事前登録 U・V・W・X・Z を判定する期間（KNOWLEDGE.md の登録どおり）
 if (d0, d1) == Y4 and half != "20230508":
     print(f"y4 の前半の最終日は 20230508（365日を 182日・183日に2等分）。指定 {half} は登録の「日付で2等分」とずれるので止める"); sys.exit(2)
+Y5 = ("20211108", "20221107")  # y5：下書き reports/y5_prereg_draft.md。正式な登録の前は、表と予測を作るところまでで止める
+if (d0, d1) == Y5 and half != "20220508":
+    print(f"y5 の前半の最終日は 20220508（182日・183日に2等分）。指定 {half} はずれるので止める"); sys.exit(2)
 OUTD = K + f"out/{tag}/"; os.makedirs(OUTD, exist_ok=True)
 LOG = open(OUTD + "run.log", "a", encoding="utf-8")
 def say(*a):
@@ -48,12 +51,18 @@ if CHECK:
         say("[1] まだ取り込み中。終わってからもう一度実行する"); sys.exit(2)
 PY = ["python", "-I"]
 run("2a 選手表", PY + ["research/ana_build_small.py", d0, d1, OUTD + "ana.pkl"], OUTD + "ana.pkl")
-run("2b 3連単の表", PY + ["research/tri3_build_small.py", OUTD + "ana.pkl", OUTD + "tri.pkl"], OUTD + "tri.pkl")
+# 2a+ 直近の着順・番狂わせの履歴（機械の特徴量）を足す。2026-11-11 まで飛ばしていて、機械の重み16〜25%の特徴量が空だった
+run("2a+ 追加の手がかり", PY + ["research/ext_small.py", OUTD + "ana.pkl", OUTD + "ana_ext.pkl"], OUTD + "ana_ext.pkl")
+run("2b 3連単の表", PY + ["research/tri3_build_small.py", OUTD + "ana_ext.pkl", OUTD + "tri.pkl"], OUTD + "tri.pkl")
 s0 = (dt.datetime.strptime(d0, "%Y%m%d") - dt.timedelta(days=75)).strftime("%Y%m%d")  # 得点の流れ（60日前）などのため少し前から
 run("3 side", PY + ["research/angle_side2.py", K + "keirin.sqlite", s0, d1, tag], K + f"out/side_races_{tag}.pkl")
 run("4 表", PY + ["research/build_cache_period.py", OUTD + "tri.pkl", f"_{tag}", OUTD + "cache.pkl"], OUTD + "cache.pkl")
 run("5 予測", PY + ["research/z_predict_period.py", OUTD + "zpred.pkl"], OUTD + "zpred.pkl", env={"ANGLE_CACHE": OUTD + "cache.pkl", "SIDE_SUFFIX": f"_{tag}"})
 rep = K + f"reports/prereg_{tag}.md"
+if (d0, d1) == Y5:
+    say("[6] y5 は正式な事前登録の前なので、判定はしない（結果を見ないため）。登録の後に："
+        f" python -I -X utf8 research/prereg_eval_y5.py {OUTD}cache.pkl _{tag} {d0} {d1} {half} <m> {rep}")
+    sys.exit(0)
 if os.path.exists(rep) and not FORCE: os.remove(rep)
 if (d0, d1) == Y4:
     # y4 は事前登録 U・V・W・X・Z の判定。X 用に機械v1 の予測も作る（作らないと X が「未判定」になる）
