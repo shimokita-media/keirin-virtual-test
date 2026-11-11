@@ -55,7 +55,8 @@ run("2a 選手表", PY + ["research/ana_build_small.py", d0, d1, OUTD + "ana.pkl
 run("2a+ 追加の手がかり", PY + ["research/ext_small.py", OUTD + "ana.pkl", OUTD + "ana_ext.pkl"], OUTD + "ana_ext.pkl")
 run("2b 3連単の表", PY + ["research/tri3_build_small.py", OUTD + "ana_ext.pkl", OUTD + "tri.pkl"], OUTD + "tri.pkl")
 s0 = (dt.datetime.strptime(d0, "%Y%m%d") - dt.timedelta(days=75)).strftime("%Y%m%d")  # 得点の流れ（60日前）などのため少し前から
-run("3 side", PY + ["research/angle_side2.py", K + "keirin.sqlite", s0, d1, tag], K + f"out/side_races_{tag}.pkl")
+# 完了の印は最後に書く results（angle_side2.py は races → entries → results の順に書く。途中で止まると races だけ残るため。2026-11-11 Codex の指摘）
+run("3 side", PY + ["research/angle_side2.py", K + "keirin.sqlite", s0, d1, tag], K + f"out/side_results_{tag}.pkl")
 run("4 表", PY + ["research/build_cache_period.py", OUTD + "tri.pkl", f"_{tag}", OUTD + "cache.pkl"], OUTD + "cache.pkl")
 run("5 予測", PY + ["research/z_predict_period.py", OUTD + "zpred.pkl"], OUTD + "zpred.pkl", env={"ANGLE_CACHE": OUTD + "cache.pkl", "SIDE_SUFFIX": f"_{tag}"})
 rep = K + f"reports/prereg_{tag}.md"
@@ -67,14 +68,23 @@ if os.path.exists(rep) and not FORCE: os.remove(rep)
 if (d0, d1) == Y4:
     # y4 は事前登録 U・V・W・X・Z の判定。X 用に機械v1 の予測も作る（作らないと X が「未判定」になる）
     run("5b 予測（機械v1・X用）", PY + ["research/x_predict_period.py", OUTD + "xpred.pkl"], OUTD + "xpred.pkl", env={"ANGLE_CACHE": OUTD + "cache.pkl", "SIDE_SUFFIX": f"_{tag}"})
-    run("6 判定（y4）", PY + ["research/prereg_eval_y4.py", OUTD + "cache.pkl", f"_{tag}", OUTD + "zpred.pkl", d0, d1, half, rep, OUTD + "xpred.pkl"], rep)
-    # 事前登録「弱い3着」2つ（2026-11-11 0:50 登録・y4 を見る前）。U〜Z とは別の表・別の BH 補正
-    # 専用の報告も毎回作り直す（残っていると run() が飛ばして古い結果が残る。2026-11-11 Codex の指摘）
-    for extra in (f"reports/prereg_{tag}_avoid.md", f"reports/prereg_{tag}_weak3.md"):
-        if os.path.exists(K + extra) and not FORCE: os.remove(K + extra)
+    # 判定の報告は、いったん out/y4/staging/ に書き、3つ全部そろってから reports/ に移す（途中で失敗したとき、先にできた判定が見える状態で止まらないため。2026-11-11 Codex の指摘）
+    # 途中で止まったら staging の中は開かずに原因を直し、staging を消してからやり直す
+    import shutil
+    STG = OUTD + "staging/"
+    if os.path.isdir(STG) and not os.path.exists(STG + "DONE"): shutil.rmtree(STG)  # 前回の途中の分は見ずに消す
+    os.makedirs(STG, exist_ok=True)
+    finals = {STG + "main.md": rep, STG + "avoid.md": K + f"reports/prereg_{tag}_avoid.md", STG + "weak3.md": K + f"reports/prereg_{tag}_weak3.md"}
+    for dst in finals.values():  # 専用の報告も毎回作り直す（残っていると古い結果が残る）
+        if os.path.exists(dst) and not FORCE: os.remove(dst)
+    run("6 判定（y4）", PY + ["research/prereg_eval_y4.py", OUTD + "cache.pkl", f"_{tag}", OUTD + "zpred.pkl", d0, d1, half, STG + "main.md", OUTD + "xpred.pkl"], STG + "main.md")
     # 事前登録「一番の目×割高な目を外す」（2026-11-11 2:25 登録・y4 を見る前）。別の表・BH は m=1
-    run("6c 判定（y4・一番の目×割高な目を外す）", PY + ["research/prereg_eval_y4_avoid.py", OUTD + "cache.pkl", f"_{tag}", d0, d1, half, K + f"reports/prereg_{tag}_avoid.md"], K + f"reports/prereg_{tag}_avoid.md")
-    run("6b 判定（y4・弱い3着）", PY + ["research/prereg_eval_y4_weak3.py", OUTD + "cache.pkl", f"_{tag}", d0, d1, half, K + f"reports/prereg_{tag}_weak3.md"], K + f"reports/prereg_{tag}_weak3.md")
+    run("6c 判定（y4・一番の目×割高な目を外す）", PY + ["research/prereg_eval_y4_avoid.py", OUTD + "cache.pkl", f"_{tag}", d0, d1, half, STG + "avoid.md"], STG + "avoid.md")
+    # 事前登録「弱い3着」2つ（2026-11-11 0:50 登録・y4 を見る前）。U〜Z とは別の表・別の BH 補正
+    run("6b 判定（y4・弱い3着）", PY + ["research/prereg_eval_y4_weak3.py", OUTD + "cache.pkl", f"_{tag}", d0, d1, half, STG + "weak3.md"], STG + "weak3.md")
+    for src, dst in finals.items(): shutil.copyfile(src, dst)
+    open(STG + "DONE", "w").close()
+    say("[6] 判定の報告3つを reports/ に移した：" + "、".join(os.path.basename(d) for d in finals.values()))
 else:
     run("6 判定", PY + ["research/prereg_eval_full.py", OUTD + "cache.pkl", f"_{tag}", OUTD + "zpred.pkl", d0, d1, half, rep], rep)
 # 取り込みが生きているか

@@ -36,4 +36,6 @@ sh(PY + [K + "research/preclose_1min.py", K + "reports/preclose_1min.md"])
 # ⑦ 本番の記録で判定する事前登録（1,000R たまるまでは件数だけ。たまったら登録どおり判定）
 sh(PY + [K + "research/prereg_late_money.py", K + "reports/prereg_late_money.md"])
 sh(PY + [K + "research/prereg_leadlag.py", K + "reports/prereg_leadlag.md"])
+# ⑧ 締切30秒前の倍率（T05、11/11〜）の分析：①T1 と違うか ②T1→T05 で縮んだ目は当たるか ③残りの動き（200R 未満は「まだ少ない」と出る）
+sh(PY + [K + "research/t05_analysis.py", K + "reports/t05_analysis.md"])
 print("完了：reports/z_forward.md・reports/preclose_1min.md・reports/prereg_late_money.md・reports/prereg_leadlag.md")

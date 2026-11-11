@@ -15,9 +15,16 @@ T = pd.read_pickle(P_(fT)); T = T[T.date.between(d0, d1)].copy().reset_index(dro
 E = pd.read_pickle(K + f"out/side_entries{suf}.pkl"); ab = set(E[E.absent == 1].race_id)
 S333 = {"伊東", "小田原", "松戸", "奈良", "富山", "防府", "前橋"}; S500 = {"宇都宮", "大宮", "高知"}
 top = T[T.is_top]
-G = {"① 一番の目（全体）": top}
-if USE_Y: G["② 400m・欠場なしの一番の目"] = top[~top.venue.isin(S333 | S500) & ~top.race_id.isin(ab)]
-G["③ 本命3連単×弱い3着"] = T[(T.odds <= 10) & ((T.G == 1) | (T.entries_number >= 9)) & (T.r2_pt_rank >= 5)]
+PLAN = next((a.split("=")[1] for a in sys.argv if a.startswith("--plan=")), None)  # 2026-11-11 y4 の後の見直し（y5_prereg_draft.md 8章）：A＝①＋⑥、B＝A＋ワイド枠（別スクリプト prereg_eval_y5_wide.py、m=3）、C＝⑥だけ
+W400 = top[~top.venue.isin(S333 | S500) & ~top.race_id.isin(ab) & (top.r2_pt_rank >= 5)]  # ⑥ 400mの一番の目×弱い3着（一番の目×400m×欠場なし×3着5位以下＝y4 で判定した登録と同じ定義）
+if PLAN in ("A", "B"):
+    G = {"① 一番の目（全体）": top, "⑥ 400mの一番の目×弱い3着": W400}
+elif PLAN == "C":
+    G = {"⑥ 400mの一番の目×弱い3着": W400}
+else:  # 最初の下書き（①②③）
+    G = {"① 一番の目（全体）": top}
+    if USE_Y: G["② 400m・欠場なしの一番の目"] = top[~top.venue.isin(S333 | S500) & ~top.race_id.isin(ab)]
+    G["③ 本命3連単×弱い3着"] = T[(T.odds <= 10) & ((T.G == 1) | (T.entries_number >= 9)) & (T.r2_pt_rank >= 5)]
 rng = np.random.default_rng(0)
 def st(g):
     by = g.groupby("race_id").ret.agg(["sum", "size"]); s, n = by["sum"].to_numpy(), by["size"].to_numpy()
@@ -30,7 +37,7 @@ names = list(R); pv = np.array([R[k]["p"] for k in names]); order = np.argsort(p
 kmax = max([i + 1 for i, j in enumerate(order) if pv[j] <= 0.05 * (i + 1) / m], default=0); bh = {names[j]: i < kmax for i, j in enumerate(order)}
 w333 = top[top.venue.isin(S333)].ret.mean() if len(top[top.venue.isin(S333)]) else 9
 def ok(k, s):
-    if k.startswith("①") or k.startswith("③"): base = s["lo"] >= 0.95 and s["h1"] > 1 and s["h2"] > 1
+    if k.startswith(("①", "③", "⑥")): base = s["lo"] >= 0.95 and s["h1"] > 1 and s["h2"] > 1
     else: base = s["roi"] >= 1.2 and s["lo"] >= 1.0 and s["h1"] > 1 and s["h2"] > 1 and s["roi"] > w333
     return base and bh[k]
 L = [f"# y5 の3連単の候補の判定（{d0}〜{d1}・前半〜{half}・BH の m={m}）", "",
