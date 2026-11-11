@@ -818,6 +818,62 @@ def record_Y(con, row, odds, meta, tri):
     return [top] if ok else []
 
 
+L_PHASES = {"B3L1": "L1 ライン順×3着得点7位以下×10倍以下", "B3L5": "L5 9車×ライン順×3着得点7位以下×20倍以下"}
+
+
+def record_L(con, row, odds, meta):
+    """ライン順×最下位級の3着 B3L1・B3L5（2026-11-12〜、ユーザー了承・記録のみ・通知しない）。KNOWLEDGE ★事前登録 L1・L5 と同じ条件を
+    締切1分前の倍率に当てはめる（研究は確定オッズで選んでいるので、1分前で選んだときの成績を確かめるための記録）。
+    ライン順＝line_json の同じラインの1番目→2番目→3番目（research/ana_build_small.py と同じ：ラインの位置は欠場者も含めた並びの順）。
+    得点順位＝欠場を除く出走者の競走得点の高い順（同点は小さい順位、得点なしは順位なし）。L1＝3着が7位以下×10倍以下、L5＝9車以上×3着7位以下×20倍以下。
+    各100円。phase ごとに1回だけ書く（当てはまる目がなければ「見送り」の1行）。書けていない phase だけ書くので、やり直しても重ならない"""
+    mins = (row["close_at"] - time.time()) / 60
+    if not (0.3 <= mins <= 8.0):
+        return None
+    rid = row["race_id"]
+    pending = [ph for ph in L_PHASES if not con.execute("SELECT 1 FROM predictions WHERE race_id=? AND phase=? LIMIT 1", (rid, ph)).fetchone()]
+    if not pending:
+        return {}
+    picks = {ph: [] for ph in L_PHASES}
+    if (row["class"] or "") != "L級" and odds.get("3連単"):
+        pts = con.execute("SELECT number, race_point FROM entries WHERE race_id=? AND absent=0", (rid,)).fetchall()
+        vals = [p for _, p in pts if p is not None]
+        rank = {int(n): 1 + sum(1 for v in vals if v > p) for n, p in pts if n is not None and p is not None}
+        try:
+            lines = [[int(x) for e in l.get("entries", []) for x in e.get("numbers", [])] for l in json.loads(row["line_json"] or "[]")]
+        except Exception:
+            lines = []
+        pos = {n: (i, j) for i, l in enumerate(lines) for j, n in enumerate(l)}
+        nine = (row["entries_number"] or 0) >= 9
+        for c, (o, _mx, _pop) in odds["3連単"].items():
+            try:
+                a, b, d = map(int, c.split("-"))
+            except ValueError:
+                continue
+            if not o or a not in pos or b not in pos or d not in pos:
+                continue
+            (la, ja), (lb, jb), (ld, jd) = pos[a], pos[b], pos[d]
+            if not (la == lb == ld and (ja, jb, jd) == (0, 1, 2) and (rank.get(d) or 0) >= 7):
+                continue
+            if o <= 10:
+                picks["B3L1"].append({"combo": c, "odds": o})
+            if nine and o <= 20:
+                picks["B3L5"].append({"combo": c, "odds": o})
+    created = now().isoformat(timespec="seconds")
+    for ph in pending:
+        recs = [(p["combo"], 100, p["odds"]) for p in picks[ph]] or [("", 0, None)]
+        for c, s_, o in recs:
+            sha = hashlib.sha256(f"{rid}|{ph}|{created}|{c}|{s_}|{o}".encode()).hexdigest()[:16]
+            con.execute("""INSERT INTO predictions(race_id,phase,created_at,close_at,minutes_to_close,bet_type,combo,stake,
+                ref_odds,ref_source,ref_odds_fetched_at,ref_source_updated_at,model_prob,ev_a10,ev_a115,bet_rating,race_rating,reason,sha)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                        (rid, ph, created, ts(row["close_at"]), round(mins, 1), "3連単" if s_ else "見送り", c, s_, o, meta["source"],
+                         meta["fetched_at"], meta["source_updated_at"], None, None, None, ph[2:], ph[2:] if picks[ph] else "C",
+                         json.dumps({ph: L_PHASES[ph]}, ensure_ascii=False), sha))
+        con.commit()  # phase ごとに確定（途中で失敗しても、書けた phase は二度書かない）
+    return {ph: picks[ph] for ph in pending}
+
+
 def record_best(con, row, odds, meta, tri):
     """🏆最強枠 B3S（2026-11-09〜、ユーザー依頼・記録のみ）。3連単枠の一番の目の出走表の点数が3以上のときだけ、
     一番の目の3連単（点数5=500円・3〜4=100円）＋同じ3人の3連複（100円）を記録。読み戻しで一致を確認する"""
