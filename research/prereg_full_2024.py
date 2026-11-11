@@ -61,8 +61,20 @@ run("4 表", PY + ["research/build_cache_period.py", OUTD + "tri.pkl", f"_{tag}"
 run("5 予測", PY + ["research/z_predict_period.py", OUTD + "zpred.pkl"], OUTD + "zpred.pkl", env={"ANGLE_CACHE": OUTD + "cache.pkl", "SIDE_SUFFIX": f"_{tag}"})
 rep = K + f"reports/prereg_{tag}.md"
 if (d0, d1) == Y5:
-    say("[6] y5 は正式な事前登録の前なので、判定はしない（結果を見ないため）。登録の後に："
-        f" python -I -X utf8 research/prereg_eval_y5.py {OUTD}cache.pkl _{tag} {d0} {d1} {half} <m> {rep}")
+    # 2026-11-11 15:50 ★事前登録（y5）「案A」（KNOWLEDGE.md）：① 一番の目（全体）・⑥ 400mの一番の目×弱い3着、BH の m=2。登録どおり判定まで自動で回す
+    # 報告は out/y5/staging/ に書いてから reports/ に移す（途中で失敗しても判定が見える状態で止まらない）
+    import shutil
+    STG = OUTD + "staging/"
+    if os.path.isdir(STG) and not os.path.exists(STG + "DONE"): shutil.rmtree(STG)
+    os.makedirs(STG, exist_ok=True)
+    if os.path.exists(rep) and not FORCE: os.remove(rep)
+    run("6 判定（y5・案A）", PY + ["research/prereg_eval_y5.py", OUTD + "cache.pkl", f"_{tag}", d0, d1, half, "2", STG + "main.md", "--plan=A"], STG + "main.md")
+    # 2026-11-11 18:00 ★事前登録（y5）「ライン順×最下位級の3着」（L1・L2、別の組・BH の m=2）
+    rep_lo = K + f"reports/prereg_{tag}_lo.md"
+    if os.path.exists(rep_lo) and not FORCE: os.remove(rep_lo)
+    run("6d 判定（y5・ライン順×最下位級の3着）", PY + ["research/prereg_eval_y5_lo.py", OUTD + "cache.pkl", d0, d1, half, STG + "lo.md"], STG + "lo.md")
+    shutil.copyfile(STG + "main.md", rep); shutil.copyfile(STG + "lo.md", rep_lo); open(STG + "DONE", "w").close()
+    say(f"[6] 判定の報告を reports/ に移した：{os.path.basename(rep)}・{os.path.basename(rep_lo)}（「5・6年目まとめて」は y6 の後に別に回す）")
     sys.exit(0)
 if os.path.exists(rep) and not FORCE: os.remove(rep)
 if (d0, d1) == Y4:
