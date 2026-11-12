@@ -85,14 +85,16 @@ if (d0, d1) == Y6:
     STG = OUTD + "staging/"
     if os.path.isdir(STG) and not os.path.exists(STG + "DONE"): shutil.rmtree(STG)
     os.makedirs(STG, exist_ok=True)
-    finals = {STG + "lo4.md": K + "reports/prereg_y6_lo4.md", STG + "y56_lo.md": K + "reports/prereg_y56_lo.md"}
+    finals = {STG + "lo4.md": K + "reports/prereg_y6_lo4.md", STG + "y56_lo.md": K + "reports/prereg_y56_lo.md", STG + "ev.md": K + "reports/prereg_y6_ev.md"}
     for dst in finals.values():
         if os.path.exists(dst) and not FORCE: os.remove(dst)
     run("6 判定（y6・ライン順の機械・4年版）", PY + ["research/prereg_eval_y6_lo4.py", OUTD + "cache.pkl", d0, d1, half, STG + "lo4.md"], STG + "lo4.md")
     run("6b 判定（5・6年目まとめて・ライン順）", PY + ["research/prereg_eval_y56_lo.py", K + "out/y5/cache.pkl", "20211108", "20221107", OUTD + "cache.pkl", d0, d1, STG + "y56_lo.md"], STG + "y56_lo.md")
+    # 2026-11-12 夜：★「ライン順の機械・期待値の線と配分」（E1〜E3、5年まとめ・m=3）も登録どおり回す
+    run("6c 判定（y6・期待値の線と配分）", PY + ["research/prereg_eval_y6_ev.py", OUTD + "cache.pkl", d0, d1, half, STG + "ev.md"], STG + "ev.md")
     for src, dst in finals.items(): shutil.copyfile(src, dst)
     open(STG + "DONE", "w").close()
-    say("[6] 判定の報告を reports/ に移した：prereg_y6_lo4.md・prereg_y56_lo.md（別セッションの「5・6年目まとめて」は prereg_y56_pool_run.py で後から回す）")
+    say("[6] 判定の報告を reports/ に移した：prereg_y6_lo4.md・prereg_y56_lo.md・prereg_y6_ev.md（別セッションの「5・6年目まとめて」は prereg_y56_pool_run.py で後から回す）")
     sys.exit(0)
 if os.path.exists(rep) and not FORCE: os.remove(rep)
 if (d0, d1) == Y4:
