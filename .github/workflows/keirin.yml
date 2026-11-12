@@ -79,7 +79,26 @@ jobs:
         if: github.event_name == 'schedule' || inputs.mode == 'run'
         env:
           KEIRIN_MAX_SEC: ${{ inputs.max_sec || '19800' }}   # 5時間30分で区切って次のジョブへ引き継ぐ
-        run: python run_day.py
+        # 途中の控え（2026-11-12〜）：実行機が途中で落ちると（"The hosted runner lost communication"、11/11・11/12 に2回）
+        # 最後の「保存」が動かずその回の記録がすべて消えるので、45分ごとにデータベースの控えをリリース "db" に上書きする。
+        # 控えは sqlite の backup で取る（書き込み中でも壊れない）。当日ループが終わったら控えの係を止めてから、いつもの保存に進む
+        run: |
+          (
+            while sleep 2700; do
+              mkdir -p /tmp/ckpt
+              nice -n 10 python -c "import sqlite3;s=sqlite3.connect('keirin.sqlite',timeout=60);d=sqlite3.connect('/tmp/ckpt/keirin.sqlite');s.backup(d);d.close();s.close()" \
+                && nice -n 10 gzip -f /tmp/ckpt/keirin.sqlite \
+                && gh release upload db /tmp/ckpt/keirin.sqlite.gz --clobber \
+                && echo "途中の控えを保存 $(date '+%H:%M')" || echo "途中の控えに失敗 $(date '+%H:%M')（次の回にやり直す）"
+              rm -f /tmp/ckpt/keirin.sqlite /tmp/ckpt/keirin.sqlite.gz
+            done
+          ) &
+          CK=$!
+          set +e
+          python run_day.py
+          rc=$?
+          kill $CK 2>/dev/null; wait $CK 2>/dev/null
+          exit $rc
 
       - name: データベースとレポートを保存
         if: always() && (github.event_name == 'schedule' || inputs.mode == 'run')

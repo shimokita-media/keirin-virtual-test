@@ -76,6 +76,24 @@ if (d0, d1) == Y5:
     shutil.copyfile(STG + "main.md", rep); shutil.copyfile(STG + "lo.md", rep_lo); open(STG + "DONE", "w").close()
     say(f"[6] 判定の報告を reports/ に移した：{os.path.basename(rep)}・{os.path.basename(rep_lo)}（「5・6年目まとめて」は y6 の後に別に回す）")
     sys.exit(0)
+Y6 = ("20201108", "20211107")
+if (d0, d1) == Y6:
+    # 2026-11-12：y6 の判定。★「ライン順の機械・4年版」（y6 だけ・m=2）と ★「5・6年目まとめて（ライン順）」（y5＋y6・m=4）を登録どおり回す。
+    # 別セッションの「5・6年目まとめて」（一番の目の絞り込み、prereg_y56_pool_run.py）はここでは回さない（同時に回すと out/y5・out/y6 がぶつかるので、この後に別に回す）
+    import shutil
+    if half != "20210508": say(f"y6 の前半の最終日は 20210508。指定 {half} はずれるので止める"); sys.exit(2)
+    STG = OUTD + "staging/"
+    if os.path.isdir(STG) and not os.path.exists(STG + "DONE"): shutil.rmtree(STG)
+    os.makedirs(STG, exist_ok=True)
+    finals = {STG + "lo4.md": K + "reports/prereg_y6_lo4.md", STG + "y56_lo.md": K + "reports/prereg_y56_lo.md"}
+    for dst in finals.values():
+        if os.path.exists(dst) and not FORCE: os.remove(dst)
+    run("6 判定（y6・ライン順の機械・4年版）", PY + ["research/prereg_eval_y6_lo4.py", OUTD + "cache.pkl", d0, d1, half, STG + "lo4.md"], STG + "lo4.md")
+    run("6b 判定（5・6年目まとめて・ライン順）", PY + ["research/prereg_eval_y56_lo.py", K + "out/y5/cache.pkl", "20211108", "20221107", OUTD + "cache.pkl", d0, d1, STG + "y56_lo.md"], STG + "y56_lo.md")
+    for src, dst in finals.items(): shutil.copyfile(src, dst)
+    open(STG + "DONE", "w").close()
+    say("[6] 判定の報告を reports/ に移した：prereg_y6_lo4.md・prereg_y56_lo.md（別セッションの「5・6年目まとめて」は prereg_y56_pool_run.py で後から回す）")
+    sys.exit(0)
 if os.path.exists(rep) and not FORCE: os.remove(rep)
 if (d0, d1) == Y4:
     # y4 は事前登録 U・V・W・X・Z の判定。X 用に機械v1 の予測も作る（作らないと X が「未判定」になる）
