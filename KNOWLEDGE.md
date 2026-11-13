@@ -2089,3 +2089,12 @@
 ### 2026-11-14 00:34 ディスクがほぼ満杯（残り0.6GB）→ 中間ファイルを削除
 - 別セッションが 23:20〜0:15 に y9・y10 の表を作り直していて、空きが0.6GBまで減った。out/y10/tri.pkl は途中で切れていて読めなかった（ディスク不足のため。out/y10/cache.pkl 1.14GB も途中で切れている可能性が高い）
 - 削除：out/y9/tri.pkl（行・列とも y9/cache.pkl に全部入っていることを確認）、out/y10/tri.pkl（壊れていて使えない）。y10 を使うときは out/bf/y10 から作り直す
+
+### 2026-11-14 01:13 古い作業用ファイルの整理（ユーザー依頼「古い作業用ファイル整理して」）
+- 削除（中身がほかに全部あることを確認）：out/fresh〜fresh7/tri.pkl（行が angle_base.pkl に100%入っている。fresh8 は入っていないので残す）、out/y2024a/tri.pkl（y2024full/cache.pkl に100%）、out/eval_work/keirin.sqlite と .gz（2,668R すべて out/live_db にある）、out/live_snapshot/keirin.sqlite.gz（展開済みの写し）
+- 削除（作り直せる・壊れている）：out/y10/cache.pkl（途中で切れて読めない。out/bf/y10 から research/build_year.py で作り直す）、out/are_work の大きなキャッシュ（narrow_tr/te・tri_odds・tri_odds_2024・multi_cache・y4_new。research/are_*.py を回すと作り直る。結果の *_out.txt・*_res.pkl は残した）
+
+### 2026-11-14 01:17 本番に E1 の記録だけの枠 B3E を追加（ユーザー了承「たのむ」）
+- kr.record_E1（run_day の締切1分前の判断で、B3L の後に呼ぶ。取りこぼしのやり直しにも入れた）。通知も実投票もしない。predictions.phase='B3E'、各100円、model_prob＝機械の見込み、ev_a10＝期待値、なければ「見送り」1行
+- 式と係数は研究と同じ（research/lo_model_coef_4yr.json、ライン順×15倍以下×ev≥1.2、pn は1分前の300倍以下の目で）。本番DBの 11/7〜11/12 の1分前の倍率で動かして、研究側（lo_forward_t1）と同じ140通りの目を選び、期待値の差は中央0・最大0.06（当日の流れの数え方の違い：本番の関数は結果の出た全部のレースで数える＝過去データの作り方に近い）
+- 別セッションの未コミットの変更（kr.py・run_day.py の T1 の出走表の凍結）は、このコミットに入れていない

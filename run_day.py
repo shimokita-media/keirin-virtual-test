@@ -127,6 +127,10 @@ def tick(con, done_results):
                         kr.record_L(con, r, odds, meta)
                     except Exception:
                         say("ERR B3L", rid, traceback.format_exc()[-300:])
+                    try:  # E1（B3E、2026-11-14〜、ユーザー了承）：ライン順×15倍以下×期待値1.2以上。通知はせず記録だけ
+                        kr.record_E1(con, r, odds, meta)
+                    except Exception:
+                        say("ERR B3E", rid, traceback.format_exc()[-300:])
                     # 直前情報（2026-11-10〜、ユーザー了承）：欠場者がいるレースは3連単が3期間とも割高（36〜66%）なので、3連単枠は通知しない（記録は残す）
                     try:
                         absent_n = con.execute("SELECT COUNT(*) FROM entries WHERE race_id=? AND absent=1", (rid,)).fetchone()[0]
@@ -169,11 +173,12 @@ def tick(con, done_results):
             # B3L の取りこぼしのやり直し（2026-11-12〜）：法則枠（B1R）は書けたのに B3L1・B3L5 が欠けたレース（上の途中で失敗・再起動など）だけ、
             # 判断の窓の中でもう一度倍率を取って書く。B1R の分岐には入り直さないので、ほかの枠や通知は重ならない
             mins = (r["close_at"] - time.time()) / 60
-            if DECIDE_WINDOW[0] <= mins <= DECIDE_WINDOW[1] and has(con, rid, "B1R") and not all(has(con, rid, ph) for ph in kr.L_PHASES):
+            if DECIDE_WINDOW[0] <= mins <= DECIDE_WINDOW[1] and has(con, rid, "B1R") and not all(has(con, rid, ph) for ph in list(kr.L_PHASES) + [kr.E1_PHASE]):
                 try:
                     rd, odds, meta = kr.fetch_race(con, r, "B3L")
                     if odds and odds["3連単"]:
                         kr.record_L(con, con.execute("SELECT * FROM races WHERE race_id=?", (rid,)).fetchone(), odds, meta)
+                        kr.record_E1(con, con.execute("SELECT * FROM races WHERE race_id=?", (rid,)).fetchone(), odds, meta)
                 except Exception:
                     say("ERR B3L retry", rid, traceback.format_exc()[-300:])
         except Exception:

@@ -11,6 +11,7 @@ import datetime as dt
 import hashlib
 import itertools
 import json
+import math
 import os
 import sqlite3
 import time
@@ -872,6 +873,109 @@ def record_L(con, row, odds, meta):
                          json.dumps({ph: L_PHASES[ph]}, ensure_ascii=False), sha))
         con.commit()  # phase ごとに確定（途中で失敗しても、書けた phase は二度書かない）
     return {ph: picks[ph] for ph in pending}
+
+
+E1_PHASE = "B3E"
+_E1_COEF = None
+
+
+def _e1_coef():
+    """E1 の係数（research/lo_model_coef_4yr.json、4年で学んで固定）。並びは const＋LO_COLS"""
+    global _E1_COEF
+    if _E1_COEF is None:
+        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "research", "lo_model_coef_4yr.json"), encoding="utf-8") as f:
+            _E1_COEF = json.load(f)["coef"]
+    return _E1_COEF
+
+
+def _e1_lines(line_json):
+    try:
+        return [[int(x) for e in l.get("entries", []) for x in e.get("numbers", [])] for l in json.loads(line_json or "[]")]
+    except Exception:
+        return []
+
+
+def _e1_flow(con, row):
+    """当日の流れ（research/prereg_eval_y5_lo.py と同じ）：同じ場・同じ日で race_no が小さい、結果の出たレース（L級除く）のうち、
+    1着がライン先頭（line_json のラインの1番目。ラインに入っていなければ先頭扱い）で、かつ3連単の払戻が300倍以下だった割合。前のレース数 n_prev"""
+    prev = con.execute("""SELECT race_id, line_json FROM races WHERE venue=? AND date=? AND race_no<? AND COALESCE(class,'')!='L級'
+        AND race_id IN (SELECT race_id FROM results)""", (row["venue"], row["date"], row["race_no"])).fetchall()
+    lw = 0
+    for p in prev:
+        w = con.execute("SELECT number FROM results WHERE race_id=? AND rank=1 ORDER BY number LIMIT 1", (p[0],)).fetchone()
+        pay = con.execute("SELECT payout FROM payouts WHERE race_id=? AND bet_type='3連単' ORDER BY fetched_at DESC LIMIT 1", (p[0],)).fetchone()
+        if not w or not pay or pay[0] is None or pay[0] > 30000:
+            continue
+        L = next((l for l in _e1_lines(p[1]) if int(w[0]) in l), [int(w[0])])
+        lw += L.index(int(w[0])) == 0
+    n = len(prev)
+    return (lw / n if n else None), n
+
+
+def record_E1(con, row, odds, meta):
+    """E1 B3E（2026-11-14〜、ユーザー了承・記録のみ・通知しない）。KNOWLEDGE ★事前登録 E1（y6・y7・y8・y9・y10 で合格）と同じ式・同じ係数を
+    締切1分前の倍率に当てはめる。研究は確定オッズで選んでいるので、本番の1分前で選んだときの成績を確かめるための記録。
+    対象＝ライン順（同じラインの1番目→2番目→3番目、3人とも出走）×3連単15倍以下。pn＝300倍以下の目の 1/倍率 をレース内で合計1にしたもの。
+    機械の見込み p＝sigmoid(logit(pn)＋係数·材料)、期待値 ev＝p×倍率。ev≥1.2 の目を各100円。レースごとに1回だけ書く（なければ「見送り」1行）"""
+    mins = (row["close_at"] - time.time()) / 60
+    if not (0.3 <= mins <= 8.0):
+        return None
+    rid = row["race_id"]
+    if con.execute("SELECT 1 FROM predictions WHERE race_id=? AND phase=? LIMIT 1", (rid, E1_PHASE)).fetchone():
+        return []
+    picks = []
+    tri = odds.get("3連単") or {}
+    if (row["class"] or "") != "L級" and tri:
+        ent = {int(r[0]): r for r in con.execute("SELECT number, race_point, style, age, third_rate FROM entries WHERE race_id=? AND absent=0", (rid,)).fetchall()}
+        vals = [r[1] for r in ent.values() if r[1] is not None]
+        rank = {n: 1 + sum(1 for v in vals if v > r[1]) for n, r in ent.items() if r[1] is not None}
+        lines = _e1_lines(row["line_json"])
+        pos = {n: (i, j) for i, l in enumerate(lines) for j, n in enumerate(l)}
+        nstrong = sum(1 for l in lines if l and l[0] in ent and ent[l[0]][2] == "逃" and rank.get(l[0], 9) <= 3)
+        flow, n_prev = _e1_flow(con, row)
+        q = {c: 1 / v[0] for c, v in tri.items() if v[0] and 0 < v[0] <= 300}
+        sq = sum(q.values())
+        G = str(row["grade"] or "").startswith("G"); nine = (row["entries_number"] or 0) >= 9
+        di = row["day_index"] or 0; nl = len(lines); b = _e1_coef()
+        fl = 0.5 if flow is None else flow
+        for c, v in tri.items():
+            o = v[0]
+            try:
+                a, m, d = map(int, c.split("-"))
+            except ValueError:
+                continue
+            if not o or o > 15 or c not in q or not all(x in ent and x in pos for x in (a, m, d)):
+                continue
+            (la, ja), (lm, jm), (ld, jd) = pos[a], pos[m], pos[d]
+            if not (la == lm == ld and (ja, jm, jd) == (0, 1, 2)):
+                continue
+            pn = q[c] / sq
+            ra, rm, rd_ = rank.get(a), rank.get(m), rank.get(d)
+            age = ent[d][3] if ent[d][3] is not None else 38
+            t3 = ent[d][4] if ent[d][4] is not None else 30
+            c7 = float((rd_ or 0) >= 7)
+            lowf = float(n_prev >= 1 and flow is not None and flow <= 0.3)
+            X = [c7, float(rd_ in (5, 6)), float(ra == 1), float((ra or 0) >= 4), float(rm == 1), float((rm or 0) >= 4),
+                 fl - 0.5, lowf, float(n_prev == 0), c7 * lowf, c7 * (fl - 0.5), float(nl == 3), float(nl >= 4), float(len(lines[la]) >= 4),
+                 float(di == 2), float(di >= 3), float(G), float(nine), float(ent[a][2] == "逃"), float(ent[m][2] == "追"),
+                 (float(age) - 38) / 10, (float(t3) - 30) / 20, float(nstrong >= 2), math.log(pn) - math.log(0.15)]
+            pc = min(max(pn, 1e-6), 1 - 1e-6)
+            z = math.log(pc / (1 - pc)) + b[0] + sum(w * x for w, x in zip(b[1:], X))
+            p = 1 / (1 + math.exp(-z)); ev = p * o
+            if ev >= 1.2:
+                picks.append({"combo": c, "odds": o, "p": p, "ev": ev})
+    created = now().isoformat(timespec="seconds")
+    recs = [(p["combo"], 100, p["odds"], p["p"], p["ev"]) for p in picks] or [("", 0, None, None, None)]
+    for c, s_, o, p, ev in recs:
+        sha = hashlib.sha256(f"{rid}|{E1_PHASE}|{created}|{c}|{s_}|{o}".encode()).hexdigest()[:16]
+        con.execute("""INSERT INTO predictions(race_id,phase,created_at,close_at,minutes_to_close,bet_type,combo,stake,
+            ref_odds,ref_source,ref_odds_fetched_at,ref_source_updated_at,model_prob,ev_a10,ev_a115,bet_rating,race_rating,reason,sha)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    (rid, E1_PHASE, created, ts(row["close_at"]), round(mins, 1), "3連単" if s_ else "見送り", c, s_, o, meta["source"],
+                     meta["fetched_at"], meta["source_updated_at"], p, ev, None, "E1", "E1" if picks else "C",
+                     json.dumps({"E1": "ライン順×15倍以下×機械の期待値1.2以上（係数 lo_model_coef_4yr.json 固定）"}, ensure_ascii=False), sha))
+    con.commit()
+    return picks
 
 
 def record_best(con, row, odds, meta, tri):
