@@ -978,6 +978,93 @@ def record_E1(con, row, odds, meta):
     return picks
 
 
+AV_PHASE = "B3V"
+AV_K = 1.3  # 当たる確率＝市場の見込み×1.3（y4・y5・y6 の 1,777点で 実際÷見込み＝1.34、年ごと 1.26・1.34・1.45。research/av_calib の結果、KNOWLEDGE 2026-11-14）
+
+
+def _av_reasons(con, row, combo, tri):
+    """一番の目×割高な目を外す の7つの外し方（research/prereg_eval_y4_avoid.py・passed_forward.py と同じ）。当たった外し方の名前の一覧を返す（空なら買う）"""
+    rid = row["race_id"]
+    a, m, c = map(int, combo.split("-"))
+    bad = []
+    if con.execute("SELECT 1 FROM entries WHERE race_id=? AND absent=1 LIMIT 1", (rid,)).fetchone():
+        bad.append("欠場あり")
+    fav = min((v[0] for v in tri.values() if v[0] and 0 < v[0] <= 300), default=None)
+    if fav is not None and fav <= 3:
+        bad.append("一番人気3倍以下")
+    ent = {int(r[0]): r for r in con.execute("SELECT number, player_id, term, race_point FROM entries WHERE race_id=? AND absent=0", (rid,)).fetchall()}
+    vals = [r[3] for r in ent.values() if r[3] is not None]
+    if a in ent and ent[a][3] is not None and 1 + sum(1 for v in vals if v > ent[a][3]) == 1:
+        bad.append("1着が得点1位")
+    if a in ent and ent[a][1]:  # 休み明け：この開催の初日（出走した日）と、前の開催の最後の日の間が21日以上
+        pid = ent[a][1]
+        st = con.execute("""SELECT MIN(r.date) FROM entries e JOIN races r USING(race_id) WHERE e.player_id=? AND e.absent=0 AND r.cup_id=?""",
+                         (pid, row["cup_id"])).fetchone()[0] or row["date"]
+        pv = con.execute("""SELECT MAX(r.date) FROM entries e JOIN races r USING(race_id) WHERE e.player_id=? AND e.absent=0 AND r.date<? AND r.cup_id!=?""",
+                         (pid, st, row["cup_id"])).fetchone()[0]
+        d0 = dt.datetime.strptime(st, "%Y%m%d")
+        if pv:
+            rest = (d0 - dt.datetime.strptime(pv, "%Y%m%d")).days - 1
+        else:  # DB に前の開催がない：DB の最初の日より前に走った可能性しかない → 空いた日数の下限
+            first = con.execute("SELECT MIN(date) FROM races").fetchone()[0]
+            rest = (d0 - dt.datetime.strptime(first, "%Y%m%d")).days - 1
+        if rest >= 21:
+            bad.append("1着が休み明け")
+    if c in ent and ent[c][2] is not None:  # 新人：その月の一番新しい期から2期以内
+        mx = con.execute("""SELECT MAX(e.term) FROM entries e JOIN races r USING(race_id) WHERE r.date LIKE ?""", (row["date"][:6] + "%",)).fetchone()[0]
+        if mx is not None and mx - ent[c][2] <= 1:
+            bad.append("3着が新人")
+    lines = _e1_lines(row["line_json"])
+    pos = {n: (i, j) for i, l in enumerate(lines) for j, n in enumerate(l)}
+    la, ja = pos.get(a, (("s", a), 0)); lm, jm = pos.get(m, (("s", m), 0)); lc, _ = pos.get(c, (("s", c), 0))
+    s01, s12 = la == lm, lm == lc
+    rt = str(row["race_type"] or "")
+    if "決勝" in rt and "準" not in rt and s01 and s12:
+        bad.append("決勝で同じライン3人")
+    if "準決勝" in rt and ja == 1 and jm == 0 and s01:
+        bad.append("準決勝で番手→先頭")
+    return bad
+
+
+def record_AV(con, row, odds, meta, tri):
+    """一番の目×割高な目を外す B3V（2026-11-14〜、ユーザー了承・通知する）。★事前登録「5・6年目まとめて」で合格（y5＋y6 131%・1,132点）。
+    3連単枠（B3T）の一番の目のうち、締切1分前の倍率30倍以下で、7つの割高な目（_av_reasons）のどれにも当たらない目を100円。
+    レースごとに1回だけ書く（なければ「見送り」1行。理由は reason に残す）"""
+    mins = (row["close_at"] - time.time()) / 60
+    if not (0.3 <= mins <= 8.0):
+        return None
+    rid = row["race_id"]
+    if con.execute("SELECT 1 FROM predictions WHERE race_id=? AND phase=? LIMIT 1", (rid, AV_PHASE)).fetchone():
+        return []
+    t3 = odds.get("3連単") or {}
+    top = next((p for p in (tri or []) if p.get("top")), None)
+    picks, why = [], "一番の目なし"
+    if top:
+        if not top["odds"] or top["odds"] > 30:
+            why = "一番の目が30倍超"
+        else:
+            bad = _av_reasons(con, row, top["combo"], t3)
+            if bad:
+                why = "・".join(bad)
+            else:
+                q = {k: 1 / v[0] for k, v in t3.items() if v[0] and 0 < v[0] <= 300}
+                pn = q.get(top["combo"], 0) / (sum(q.values()) or 1)
+                picks = [{"combo": top["combo"], "odds": top["odds"], "pn": pn, "p": min(pn * AV_K, 0.95)}]
+                why = "買う"
+    created = now().isoformat(timespec="seconds")
+    recs = [(p["combo"], 100, p["odds"], p["p"]) for p in picks] or [("", 0, None, None)]
+    for cb, s_, o, pr in recs:
+        sha = hashlib.sha256(f"{rid}|{AV_PHASE}|{created}|{cb}|{s_}|{o}".encode()).hexdigest()[:16]
+        con.execute("""INSERT INTO predictions(race_id,phase,created_at,close_at,minutes_to_close,bet_type,combo,stake,
+            ref_odds,ref_source,ref_odds_fetched_at,ref_source_updated_at,model_prob,ev_a10,ev_a115,bet_rating,race_rating,reason,sha)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    (rid, AV_PHASE, created, ts(row["close_at"]), round(mins, 1), "3連単" if s_ else "見送り", cb, s_, o, meta["source"],
+                     meta["fetched_at"], meta["source_updated_at"], pr, None, None, "AV", "AV" if picks else "C",
+                     json.dumps({"一番の目×割高な目を外す": why}, ensure_ascii=False), sha))
+    con.commit()
+    return picks
+
+
 def record_best(con, row, odds, meta, tri):
     """🏆最強枠 B3S（2026-11-09〜、ユーザー依頼・記録のみ）。3連単枠の一番の目の出走表の点数が3以上のときだけ、
     一番の目の3連単（点数5=500円・3〜4=100円）＋同じ3人の3連複（100円）を記録。読み戻しで一致を確認する"""

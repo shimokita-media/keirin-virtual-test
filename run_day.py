@@ -28,7 +28,8 @@ SNAPSHOTS = {"T10": (9.0, 11.0), "T5": (4.5, 5.8), "T1": (0.4, 1.5), "T05": (0.0
 # 判断を締切に近づける価値があるかを確かめるため。ループは30秒おきなので幅は30秒より広く、判断の窓（0.75分〜）とは重ねない
 LATE_SNAPSHOTS = ("T05",)  # 1回のループで、全レースの判断のあとにまとめて取るスナップショット
 DECIDE_WINDOW = (0.75, 1.5)  # 2026-11-10〜 締切1分前ごろに判断（ユーザー希望：目減り約-3%）。11-07〜11-09 は2〜3分前、それまでは4〜7分前
-NOTIFY_RULE = False  # 2026-11-07〜 法則枠は通知せず記録のみ。Discord の買い目・結果はワイド枠だけ
+NOTIFY_RULE = False  # 2026-11-07〜 法則枠は通知せず記録のみ
+NOTIFY_PHASES = ("B3E", "B3V")  # 2026-11-14〜（ユーザー了承「合格してる二つを通知、ほかは記録のみ」）：Discord の買い目・結果は E1 と「一番の目×割高な目を外す」だけ
 ONLY_RULE = True  # 2026-11-06〜 法則枠(B1R)のみ記録（B0/B1・検証買い・万車券枠は停止。結果回収は継続）
 COMMENT_WINDOW = (2.0, 30.0)  # 2026-11-10〜 netkeirin の選手コメントを取る時間帯（締切まで何分）。判断の窓（1分前ごろ）とは重ねない
 NK_TRIES = {}  # レースごとの選手コメント取得の回数（同じレースを何度も取りに行かないため）
@@ -127,30 +128,22 @@ def tick(con, done_results):
                         kr.record_L(con, r, odds, meta)
                     except Exception:
                         say("ERR B3L", rid, traceback.format_exc()[-300:])
-                    try:  # E1（B3E、2026-11-14〜、ユーザー了承）：ライン順×15倍以下×期待値1.2以上。通知はせず記録だけ
-                        kr.record_E1(con, r, odds, meta)
+                    e1 = []
+                    try:  # E1（B3E、2026-11-14〜、ユーザー了承）：ライン順×15倍以下×期待値1.2以上。2026-11-14〜 通知する唯一の枠
+                        e1 = kr.record_E1(con, r, odds, meta) or []
                     except Exception:
                         say("ERR B3E", rid, traceback.format_exc()[-300:])
-                    # 直前情報（2026-11-10〜、ユーザー了承）：欠場者がいるレースは3連単が3期間とも割高（36〜66%）なので、3連単枠は通知しない（記録は残す）
-                    try:
-                        absent_n = con.execute("SELECT COUNT(*) FROM entries WHERE race_id=? AND absent=1", (rid,)).fetchone()[0]
+                    av = []
+                    try:  # 一番の目×割高な目を外す（B3V、2026-11-14〜、ユーザー了承）：「5・6年目まとめて」で合格。通知する
+                        av = kr.record_AV(con, r, odds, meta, tri) or []
                     except Exception:
-                        absent_n = 0
-                    tri_n = [] if absent_n else tri
-                    if absent_n and tri:
-                        notify.discord(f"⚠️ {r['venue']} {r['race_no']}R：欠場あり（{absent_n}人）→ 3連単枠 {len(tri)}点は見送り（記録だけ残す）")
-                    if out:
-                        picks, cond, m = out
-                        say("B1R", r["venue"], r["race_no"], "R", len(picks), "点", cond, "/ B1W", len(wide), "点", "/ B3T", len(tri), "点", f"（欠場{absent_n}人）" if absent_n else "")
-                        show_rule = picks if NOTIFY_RULE else []
-                        if show_rule or wide or tri_n:
-                            notify.discord(notify.picks_message(r, kr.ts(r["close_at"])[11:16], m, show_rule, wide, tri_n))
-                            notify.toast(f"競輪 {r['venue']}{r['race_no']}R 締切{kr.ts(r['close_at'])[11:16]}（あと{m:.0f}分）",
-                                         " / ".join(f"{p['bet_type']}{p['combo']} {p['odds']}倍" for p in show_rule + wide + tri_n))
-                        else:
-                            # 0点のときも一言だけ送る（動いていないのか、買い目がないのかを見分けるため。2026-11-07〜）
-                            notify.discord(f"⏭️ {r['venue']} {r['race_no']}R（締切 {kr.ts(r['close_at'])[11:16]}）：見送り（条件に合うワイド・3連単なし）")
-                        notify.write_today(con, DAY)
+                        say("ERR B3V", rid, traceback.format_exc()[-300:])
+                    # 通知の整理（2026-11-14〜、ユーザー了承）：通知は事前登録で合格した2つ（E1・B3V）だけ。
+                    # ワイド枠（本番96%）・3連単枠（y5 で不合格）などは記録だけ。レースごとの「見送り」「欠場あり」の一言も送らない（記録には残る）
+                    say("B1R", r["venue"], r["race_no"], "R", len(out[0]) if out else 0, "点", "/ B1W", len(wide), "点", "/ B3T", len(tri), "点", "/ B3E", len(e1), "点", "/ B3V", len(av), "点")
+                    if e1 or av:
+                        send_picks(r, e1, av)
+                    notify.write_today(con, DAY)
             elif not ONLY_RULE and B1_WINDOW[0] <= mins <= B1_WINDOW[1] and not has(con, rid, "B1"):
                 rd, odds, meta = kr.fetch_race(con, r, "B1")
                 nk, _ = kr.fetch_nk_odds(con, r, "B1")
@@ -167,7 +160,7 @@ def tick(con, done_results):
                     done_results.add(rid); say("result", r["venue"], r["race_no"], "R")
                     if has(con, rid, "B1R") or has(con, rid, "B3T"):
                         notify.write_today(con, DAY)
-                        msg = notify.result_message(con, rid, phases=None if NOTIFY_RULE else ("B1W", "B3T"))
+                        msg = notify.result_message(con, rid, phases=NOTIFY_PHASES)
                         if msg:
                             notify.discord(msg)
             # B3L の取りこぼしのやり直し（2026-11-12〜）：法則枠（B1R）は書けたのに B3L1・B3L5 が欠けたレース（上の途中で失敗・再起動など）だけ、
@@ -178,7 +171,9 @@ def tick(con, done_results):
                     rd, odds, meta = kr.fetch_race(con, r, "B3L")
                     if odds and odds["3連単"]:
                         kr.record_L(con, con.execute("SELECT * FROM races WHERE race_id=?", (rid,)).fetchone(), odds, meta)
-                        kr.record_E1(con, con.execute("SELECT * FROM races WHERE race_id=?", (rid,)).fetchone(), odds, meta)
+                        e1r = kr.record_E1(con, con.execute("SELECT * FROM races WHERE race_id=?", (rid,)).fetchone(), odds, meta)
+                        if e1r:  # 最初の分岐で E1 が書けなかったときだけここで書かれる → そのときも通知する
+                            send_picks(r, e1r, [])
                 except Exception:
                     say("ERR B3L retry", rid, traceback.format_exc()[-300:])
         except Exception:
@@ -215,6 +210,15 @@ def tick(con, done_results):
         break
 
 
+def send_picks(r, e1, av):
+    """合格した2つ（E1・一番の目×割高な目を外す）の買い目を通知する（2026-11-14〜）"""
+    m = (r["close_at"] - time.time()) / 60
+    hm = kr.ts(r["close_at"])[11:16]
+    notify.discord(notify.passed_message(r, hm, m, e1, av))
+    notify.toast(f"競輪 {r['venue']}{r['race_no']}R 締切{hm}（あと{m:.0f}分）",
+                 " / ".join([f"E1 {p['combo']} {p['odds']}倍 {p['p']:.0%}" for p in e1] + [f"一番の目 {p['combo']} {p['odds']}倍 {p['p']:.0%}" for p in av]))
+
+
 def heartbeat(con):
     """1時間ごとの稼働連絡。レースがある時間帯だけ（次の締切まで90分以内、または直前30分以内に締切があったとき）"""
     t = time.time()
@@ -223,9 +227,9 @@ def heartbeat(con):
         return
     since = kr.dt.datetime.fromtimestamp(t - 3600, kr.JST).isoformat(timespec="seconds")
     n_race, n_pick = con.execute("""SELECT COUNT(DISTINCT race_id), COALESCE(SUM(stake > 0), 0) FROM predictions
-                                    WHERE phase='B1W' AND created_at >= ?""", (since,)).fetchone()
+                                    WHERE phase IN ('B3E', 'B3V') AND created_at >= ?""", (since,)).fetchone()
     nxt = [r for r in rs if r["close_at"] > t + 4 * 60]
-    msg = f"⏱️ 稼働中 {kr.now():%H:%M}｜この1時間：{n_race}レース判断・ワイド枠の買い目 {n_pick}点"
+    msg = f"⏱️ 稼働中 {kr.now():%H:%M}｜この1時間：{n_race}レース判断・通知した買い目 {n_pick}点"
     if nxt:
         r = nxt[0]
         msg += f"｜次は {r['venue']} {r['race_no']}R（締切 {kr.ts(r['close_at'])[11:16]}）"
@@ -249,7 +253,8 @@ def morning(con):
     msg = [f"☀️ **おはようございます！** {DAY[4:6]}/{DAY[6:]}（{w}）",
            f"🏟️ 今日は **{len(venues)}開催・{len(rs)}レース**", f"　{'・'.join(venues)}"]
     if nxt:
-        msg.append(f"⏰ 最初の通知：{nxt[0]['venue']} {nxt[0]['race_no']}R（締切 {kr.ts(nxt[0]['close_at'])[11:16]} の1分前ごろ）")
+        msg.append(f"⏰ 最初の判断：{nxt[0]['venue']} {nxt[0]['race_no']}R（締切 {kr.ts(nxt[0]['close_at'])[11:16]} の1分前ごろ）")
+    msg.append("🔔 通知は合格した2つ（E1・一番の目×割高な目を外す）の目が出たときだけ（合わせて1日1〜3回ほど）。ワイド枠・3連単枠などは記録だけ")
     repo = os.environ.get("GITHUB_REPOSITORY")
     if repo:
         msg.append(f"📂 前日までの一覧（レース・選手・全オッズ）→ https://github.com/{repo}/releases/tag/tables")
