@@ -60,10 +60,12 @@ jobs:
           PY
 
       - name: データベースを取得
+        id: getdb
         if: github.event_name == 'schedule' || inputs.mode == 'run'
+        # 2026-11-16〜：取れなかったら新しく作らずに止める（11/14〜16、接続テストの失敗で空のDBを作って本番の記録を上書きした）
         run: |
-          gh release download db -p keirin.sqlite.gz --clobber && gunzip -f keirin.sqlite.gz || echo "DBなし（新規作成）"
-          ls -la keirin.sqlite || true
+          gh release download db -p keirin.sqlite.gz --clobber && gunzip -f keirin.sqlite.gz
+          ls -la keirin.sqlite
 
       - name: 前日分の結果を補完（取りこぼした分だけ取得するので、毎回実行しても数秒で終わる）
         if: github.event_name == 'schedule' || inputs.mode == 'run'
@@ -101,8 +103,11 @@ jobs:
           exit $rc
 
       - name: データベースとレポートを保存
-        if: always() && (github.event_name == 'schedule' || inputs.mode == 'run')
+        # 2026-11-16〜：DBを取れた回だけ保存する。記録が1,000行未満（空）のDBは上げない
+        if: always() && steps.getdb.outcome == 'success' && (github.event_name == 'schedule' || inputs.mode == 'run')
         run: |
+          n=$(python -c "import sqlite3;print(sqlite3.connect('keirin.sqlite').execute('SELECT COUNT(*) FROM predictions').fetchone()[0])")
+          if [ "$n" -lt 1000 ]; then echo "記録が少なすぎるので保存しません ($n)"; exit 1; fi
           python export.py || true
           python score_track.py || true   # 点数方式・3番手絡みの追跡（記録には触らない）
           gzip -kf keirin.sqlite
@@ -121,7 +126,8 @@ jobs:
           git diff --cached --quiet || (git commit -q -m "reports $(date '+%F %H:%M')" && (git pull -q --rebase origin main && git push -q || echo "レポートの書き込みは次回に回します"))
 
       - name: 次の回を予約（時刻指定の起動が遅れたり飛ばされたりしても途切れないように）
-        if: always() && (github.event_name == 'schedule' || inputs.mode == 'run')
+        # 2026-11-16〜：当日ループまで進んだ回だけ予約する（接続テストやDBの取得で失敗した回は予約しない。11/14〜16 に失敗→予約が2,500回以上続いた）
+        if: always() && steps.getdb.outcome == 'success' && (github.event_name == 'schedule' || inputs.mode == 'run')
         run: |
           # 実行中・待機中の回がなければ、次の回を起動する（同時実行は concurrency で1つに制限）
           n=$(gh run list --workflow keirin.yml --status queued --json databaseId --jq 'length')
