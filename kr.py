@@ -924,6 +924,9 @@ def record_E1(con, row, odds, meta):
     if con.execute("SELECT 1 FROM predictions WHERE race_id=? AND phase=? LIMIT 1", (rid, E1_PHASE)).fetchone():
         return []
     picks = []
+    mid = []  # ミッドナイト枠 B3M（2026-11-20〜、ユーザー了承・記録のみ・通知しない）：発走21時以降×同じ式の期待値1.0以上1.2未満
+    st_ = row["start_at"] or row["close_at"]
+    is_mid = bool(st_) and dt.datetime.fromtimestamp(st_, JST).hour >= 21
     tri = odds.get("3連単") or {}
     if (row["class"] or "") != "L級" and tri:
         ent = {int(r[0]): r for r in con.execute("SELECT number, race_point, style, age, third_rate FROM entries WHERE race_id=? AND absent=0", (rid,)).fetchall()}
@@ -964,7 +967,11 @@ def record_E1(con, row, odds, meta):
             p = 1 / (1 + math.exp(-z)); ev = p * o
             if ev >= 1.2:
                 picks.append({"combo": c, "odds": o, "p": p, "ev": ev})
+            elif ev >= 1.0 and is_mid:
+                mid.append({"combo": c, "odds": o, "p": p, "ev": ev})
     created = now().isoformat(timespec="seconds")
+    if is_mid:
+        _record_mid(con, row, mid, created, mins, meta)
     recs = [(p["combo"], 100, p["odds"], p["p"], p["ev"]) for p in picks] or [("", 0, None, None, None)]
     for c, s_, o, p, ev in recs:
         sha = hashlib.sha256(f"{rid}|{E1_PHASE}|{created}|{c}|{s_}|{o}".encode()).hexdigest()[:16]
@@ -976,6 +983,26 @@ def record_E1(con, row, odds, meta):
                      json.dumps({"E1": "ライン順×15倍以下×機械の期待値1.2以上（係数 lo_model_coef_4yr.json 固定）"}, ensure_ascii=False), sha))
     con.commit()
     return picks
+
+
+MID_PHASE = "B3M"
+
+
+def _record_mid(con, row, mid, created, mins, meta):
+    """ミッドナイト枠 B3M（2026-11-20〜、ユーザー了承「記録だけ足して」・記録のみ・通知しない）。KNOWLEDGE ★事前登録「ミッドナイト×期待値1.0〜1.2」と同じ：
+    E1 と同じ式・同じ係数の期待値が1.0以上1.2未満×ライン順×締切1分前の倍率15倍以下×発走21時以降。各100円。目がなければ「見送り」を1行"""
+    rid = row["race_id"]
+    if con.execute("SELECT 1 FROM predictions WHERE race_id=? AND phase=? LIMIT 1", (rid, MID_PHASE)).fetchone():
+        return
+    recs = [(p["combo"], 100, p["odds"], p["p"], p["ev"]) for p in mid] or [("", 0, None, None, None)]
+    for c, s_, o, p, ev in recs:
+        sha = hashlib.sha256(f"{rid}|{MID_PHASE}|{created}|{c}|{s_}|{o}".encode()).hexdigest()[:16]
+        con.execute("""INSERT INTO predictions(race_id,phase,created_at,close_at,minutes_to_close,bet_type,combo,stake,
+            ref_odds,ref_source,ref_odds_fetched_at,ref_source_updated_at,model_prob,ev_a10,ev_a115,bet_rating,race_rating,reason,sha)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    (rid, MID_PHASE, created, ts(row["close_at"]), round(mins, 1), "3連単" if s_ else "見送り", c, s_, o, meta["source"],
+                     meta["fetched_at"], meta["source_updated_at"], p, ev, None, "M", "M" if mid else "C",
+                     json.dumps({"ミッドナイト": "発走21時以降×ライン順×15倍以下×機械の期待値1.0以上1.2未満（E1 と同じ係数）"}, ensure_ascii=False), sha))
 
 
 AV_PHASE = "B3V"
